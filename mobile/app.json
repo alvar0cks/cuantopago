@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "Cuánto Pago",
+    "slug": "cuantopago",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "cuantopago",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.alvar0cks.cuantopago",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Cuánto Pago usa la cámara para fotografiar la boleta.",
+        "NSPhotoLibraryUsageDescription": "Cuánto Pago usa tu galería para seleccionar una foto de la boleta."
+      }
+    },
+    "android": {
+      "package": "com.alvar0cks.cuantopago",
+      "permissions": ["CAMERA", "READ_MEDIA_IMAGES"]
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Permite que Cuánto Pago seleccione la foto de una boleta.",
+          "cameraPermission": "Permite que Cuánto Pago fotografíe una boleta."
+        }
+      ]
+    ]
+  }
+}
