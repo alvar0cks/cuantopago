@@ -29,7 +29,8 @@
           "photosPermission": "Permite que Cuánto Pago seleccione la foto de una boleta.",
           "cameraPermission": "Permite que Cuánto Pago fotografíe una boleta."
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "extra": {
       "eas": {
