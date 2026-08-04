@@ -110,31 +110,37 @@ useEffect(() => {
    * Se usa para Firebase Test Lab y pruebas automatizadas, sin cámara ni galería.
    */
   const loadTestReceipt = async () => {
-    setLoadingTestReceipt(true);
+  setLoadingTestReceipt(true);
 
-    try {
-      const asset = Asset.fromModule(TEST_RECEIPT_MODULE);
+  try {
+    const [asset] = await Asset.loadAsync(TEST_RECEIPT_MODULE);
 
-      if (!asset.localUri) {
-        await asset.downloadAsync();
-      }
-
-      const uri = asset.localUri || asset.uri;
-
-      if (!uri) {
-        throw new Error('No se pudo obtener la imagen de prueba.');
-      }
-
-      selectImage(uri, 'image/jpeg');
-    } catch (error) {
-      Alert.alert(
-        'No se pudo cargar la boleta de prueba',
-        error instanceof Error ? error.message : 'Error desconocido',
+    if (!asset.localUri) {
+      throw new Error(
+        'La imagen de prueba no pudo copiarse al almacenamiento temporal.',
       );
-    } finally {
-      setLoadingTestReceipt(false);
     }
-  };
+
+    console.log(
+      '[Cuánto Pago] Ruta local de boleta de prueba:',
+      asset.localUri,
+    );
+
+    selectImage(asset.localUri, 'image/jpeg');
+  } catch (error) {
+    console.error(
+      '[Cuánto Pago] Error cargando boleta de prueba:',
+      error,
+    );
+
+    Alert.alert(
+      'No se pudo cargar la boleta de prueba',
+      error instanceof Error ? error.message : 'Error desconocido',
+    );
+  } finally {
+    setLoadingTestReceipt(false);
+  }
+};
 
   const scan = async () => {
     if (!imageUri) return;
