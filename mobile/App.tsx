@@ -42,6 +42,7 @@ export default function App() {
 }
 
 function Main() {
+  const scrollRef = useRef<ScrollView>(null);
   const [step, setStep] = useState(0);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageMime, setImageMime] = useState('image/jpeg');
@@ -56,10 +57,19 @@ function Main() {
   const [includeTransfer, setIncludeTransfer] = useState(true);
   const [transfer, setTransfer] = useState<TransferData>({
     bank: '',
-    accountType: 'Cuenta RUT',
+    accountType: '',
     accountNumber: '',
     rut: '',
   });
+
+useEffect(() => {
+  requestAnimationFrame(() => {
+    scrollRef.current?.scrollTo({
+      y: 0,
+      animated: true,
+    });
+  });
+}, [step]);
 
   const selectImage = (uri: string, mimeType = 'image/jpeg') => {
     setImageUri(uri);
@@ -517,41 +527,50 @@ ${people
             </View>
 
             {includeTransfer && (
-              <View style={styles.transferBox}>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Banco"
-                  value={transfer.bank}
-                  onChangeText={(bank) =>
-                    setTransfer((x) => ({ ...x, bank }))
-                  }
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Tipo de cuenta"
-                  value={transfer.accountType}
-                  onChangeText={(accountType) =>
-                    setTransfer((x) => ({ ...x, accountType }))
-                  }
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Número de cuenta"
-                  value={transfer.accountNumber}
-                  onChangeText={(accountNumber) =>
-                    setTransfer((x) => ({ ...x, accountNumber }))
-                  }
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="RUT"
-                  value={transfer.rut}
-                  onChangeText={(rut) =>
-                    setTransfer((x) => ({ ...x, rut }))
-                  }
-                />
-              </View>
-            )}
+<View style={styles.transferBox}>
+  <TextInput
+    style={styles.input}
+    placeholder="Banco — Ej: BancoEstado"
+    placeholderTextColor="#92929A"
+    value={transfer.bank}
+    onChangeText={(bank) =>
+      setTransfer((current) => ({ ...current, bank }))
+    }
+  />
+
+  <TextInput
+    style={styles.input}
+    placeholder="Tipo de cuenta — Ej: Cuenta RUT"
+    placeholderTextColor="#92929A"
+    value={transfer.accountType}
+    onChangeText={(accountType) =>
+      setTransfer((current) => ({ ...current, accountType }))
+    }
+  />
+
+  <TextInput
+    style={styles.input}
+    placeholder="Número de cuenta — Ej: 12345678"
+    placeholderTextColor="#92929A"
+    keyboardType="number-pad"
+    value={transfer.accountNumber}
+    onChangeText={(accountNumber) =>
+      setTransfer((current) => ({ ...current, accountNumber }))
+    }
+  />
+
+  <TextInput
+    style={styles.input}
+    placeholder="RUT — Ej: 12.345.678-9"
+    placeholderTextColor="#92929A"
+    autoCapitalize="characters"
+    value={transfer.rut}
+    onChangeText={(rut) =>
+      setTransfer((current) => ({ ...current, rut }))
+    }
+  />
+</View>
+                   )}
 
             <View style={styles.summaryBox}>
               {people.map((person) => (
