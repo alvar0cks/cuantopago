@@ -37,6 +37,7 @@ export async function saveTransferAccount(
   input: NewTransferAccount,
 ): Promise<SavedTransferAccount[]> {
   const current = await loadTransferAccounts();
+
   const nextAccount: SavedTransferAccount = {
     id: createId(),
     label: input.label.trim(),
@@ -53,6 +54,7 @@ export async function saveTransferAccount(
   const normalized = nextAccount.isDefault
     ? current.map((account) => ({ ...account, isDefault: false }))
     : current;
+
   const updated = [...normalized, nextAccount];
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
   return updated;

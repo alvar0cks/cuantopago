@@ -19,7 +19,12 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { Card, PrimaryButton, SecondaryButton } from './src/components/Ui';
+import {
+  Card,
+  GhostButton,
+  PrimaryButton,
+  SecondaryButton,
+} from './src/components/Ui';
 import { analyzeReceipt } from './src/services/api';
 import {
   deleteTransferAccount,
@@ -29,15 +34,21 @@ import {
 } from './src/services/transferAccounts';
 import type { ReceiptItem, TransferData } from './src/types';
 import { formatClp } from './src/utils/money';
-import { parseTransferText } from './src/utils/transferParser';
 import { shareOnWhatsApp } from './src/utils/share';
+import { parseTransferText } from './src/utils/transferParser';
 
 const STEPS = ['Boleta', 'Productos', 'Personas', 'Reparto', 'Cobro'];
-
+const STEP_ICONS = ['🧾', '✓', '👥', '↗', '$'];
 const TEST_RECEIPT_MODULE = require('./assets/test/boleta-irish-geopub.jpg');
-
 const TEST_RECEIPT_ENABLED =
   __DEV__ || process.env.EXPO_PUBLIC_ENABLE_TEST_RECEIPT === 'true';
+
+const EMPTY_TRANSFER: TransferData = {
+  bank: '',
+  accountType: '',
+  accountNumber: '',
+  rut: '',
+};
 
 export default function App() {
   return (
@@ -52,6 +63,7 @@ export default function App() {
 
 function Main() {
   const scrollRef = useRef<ScrollView>(null);
+
   const [step, setStep] = useState(0);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageMime, setImageMime] = useState('image/jpeg');
@@ -64,12 +76,8 @@ function Main() {
   const [payer, setPayer] = useState('');
   const [tipPercent, setTipPercent] = useState('10');
   const [includeTransfer, setIncludeTransfer] = useState(true);
-  const [transfer, setTransfer] = useState<TransferData>({
-    bank: '',
-    accountType: '',
-    accountNumber: '',
-    rut: '',
-  });
+  const [transfer, setTransfer] = useState<TransferData>(EMPTY_TRANSFER);
+
   const [savedAccounts, setSavedAccounts] = useState<SavedTransferAccount[]>([]);
   const [accountsModalVisible, setAccountsModalVisible] = useState(false);
   const [saveAccountModalVisible, setSaveAccountModalVisible] = useState(false);
@@ -79,10 +87,13 @@ function Main() {
     loadTransferAccounts()
       .then((accounts) => {
         setSavedAccounts(accounts);
-        const preferred = accounts.find((account) => account.isDefault) ?? accounts[0];
+        const preferred =
+          accounts.find((account) => account.isDefault) ?? accounts[0];
         if (preferred) setTransfer(preferred.transfer);
       })
-      .catch((error) => console.error('[Cuánto Pago] Error cargando cuentas:', error));
+      .catch((error) =>
+        console.error('[Cuánto Pago] Error cargando cuentas:', error),
+      );
   }, []);
 
   useEffect(() => {
@@ -125,22 +136,15 @@ function Main() {
     }
   };
 
-  /**
-   * Carga una boleta incluida dentro de la app.
-   * Se usa para Firebase Test Lab y pruebas automatizadas, sin cámara ni galería.
-   */
   const loadTestReceipt = async () => {
     setLoadingTestReceipt(true);
-
     try {
       const [asset] = await Asset.loadAsync(TEST_RECEIPT_MODULE);
-
       if (!asset.localUri) {
         throw new Error(
           'La imagen de prueba no pudo copiarse al almacenamiento temporal.',
         );
       }
-
       selectImage(asset.localUri, 'image/jpeg');
     } catch (error) {
       Alert.alert(
@@ -153,10 +157,15 @@ function Main() {
   };
 
   const scan = async () => {
-    if (!imageUri) return;
+    if (!imageUri) {
+      Alert.alert(
+        'Falta la boleta',
+        'Primero selecciona una imagen o carga la boleta de ejemplo.',
+      );
+      return;
+    }
 
     setLoading(true);
-
     try {
       const result = await analyzeReceipt(imageUri, imageMime);
       setItems(result.items || []);
@@ -182,24 +191,10 @@ function Main() {
   const addPerson = () => {
     const clean = newPerson.trim();
     if (!clean || people.includes(clean)) return;
-
     setPeople((current) => [...current, clean]);
     setNewPerson('');
-
     if (!payer) setPayer(clean);
   };
-
-  const toggleAssignment = (itemId: string, person: string) => {
-    setAssignments((current) => {
-      const selected = current[itemId] || [];
-      const next = selected.includes(person)
-        ? selected.filter((name) => name !== person)
-        : [...selected, person];
-
-      return { ...current, [itemId]: next };
-    });
-  };
-
 
   const removePerson = (person: string) => {
     setPeople((current) => current.filter((name) => name !== person));
@@ -214,6 +209,16 @@ function Main() {
     if (payer === person) setPayer('');
   };
 
+  const toggleAssignment = (itemId: string, person: string) => {
+    setAssignments((current) => {
+      const selected = current[itemId] || [];
+      const next = selected.includes(person)
+        ? selected.filter((name) => name !== person)
+        : [...selected, person];
+      return { ...current, [itemId]: next };
+    });
+  };
+
   const totals = useMemo(() => {
     const base = Object.fromEntries(
       people.map((person) => [person, 0]),
@@ -222,14 +227,12 @@ function Main() {
     for (const item of items) {
       const consumers = assignments[item.id] || [];
       if (!consumers.length) continue;
-
       for (const person of consumers) {
         base[person] += item.price / consumers.length;
       }
     }
 
     const tip = Math.max(0, Number(tipPercent) || 0);
-
     return Object.fromEntries(
       Object.entries(base).map(([person, value]) => [
         person,
@@ -242,6 +245,10 @@ function Main() {
     (sum, item) => sum + Number(item.price || 0),
     0,
   );
+
+  const recoverAmount = people
+    .filter((person) => person !== payer)
+    .reduce((sum, person) => sum + (totals[person] || 0), 0);
 
   const transferMessage = `${payer}
 RUT: ${transfer.rut}
@@ -262,53 +269,73 @@ ${people
   .join('\n')}`;
 
   const pasteTransferData = async () => {
-    try {
-      const text = await Clipboard.getStringAsync();
-      if (!text.trim()) {
-        Alert.alert('Portapapeles vacío', 'Copia primero los datos desde la aplicación de tu banco.');
-        return;
-      }
+    const text = await Clipboard.getStringAsync();
 
-      const parsed = parseTransferText(text);
-      const detectedCount = Object.values(parsed).filter(Boolean).length;
-      if (!detectedCount) {
-        Alert.alert('No pudimos reconocer los datos', 'Completa manualmente lo que falte.');
-        return;
-      }
-
-      setTransfer((current) => ({
-        bank: parsed.bank || current.bank,
-        accountType: parsed.accountType || current.accountType,
-        accountNumber: parsed.accountNumber || current.accountNumber,
-        rut: parsed.rut || current.rut,
-      }));
-      Alert.alert('Datos detectados', 'Revisa los campos antes de compartirlos.');
-    } catch (error) {
-      Alert.alert('No se pudo leer el portapapeles', error instanceof Error ? error.message : 'Error desconocido');
+    if (!text.trim()) {
+      Alert.alert(
+        'Portapapeles vacío',
+        'Copia primero los datos desde la aplicación de tu banco.',
+      );
+      return;
     }
+
+    const parsed = parseTransferText(text);
+    const detectedCount = Object.values(parsed).filter(Boolean).length;
+
+    if (!detectedCount) {
+      Alert.alert(
+        'No pudimos reconocer los datos',
+        'Completa manualmente lo que falte.',
+      );
+      return;
+    }
+
+    setTransfer((current) => ({
+      bank: parsed.bank || current.bank,
+      accountType: parsed.accountType || current.accountType,
+      accountNumber: parsed.accountNumber || current.accountNumber,
+      rut: parsed.rut || current.rut,
+    }));
+
+    Alert.alert('Datos detectados', 'Revísalos antes de compartir.');
   };
 
   const openSaveAccount = () => {
-    if (!transfer.bank.trim() || !transfer.accountType.trim() || !transfer.accountNumber.trim() || !transfer.rut.trim()) {
-      Alert.alert('Faltan datos', 'Completa banco, tipo de cuenta, número y RUT antes de guardar.');
+    if (
+      !transfer.bank.trim() ||
+      !transfer.accountType.trim() ||
+      !transfer.accountNumber.trim() ||
+      !transfer.rut.trim()
+    ) {
+      Alert.alert(
+        'Faltan datos',
+        'Completa banco, tipo de cuenta, número y RUT antes de guardar.',
+      );
       return;
     }
-    setAccountLabel(savedAccounts.length ? `Cuenta ${savedAccounts.length + 1}` : 'Cuenta principal');
+
+    setAccountLabel(
+      savedAccounts.length
+        ? `Cuenta ${savedAccounts.length + 1}`
+        : 'Cuenta principal',
+    );
     setSaveAccountModalVisible(true);
   };
 
   const confirmSaveAccount = async () => {
     const label = accountLabel.trim();
     if (!label) return;
-    try {
-      const updated = await saveTransferAccount({ label, transfer, isDefault: savedAccounts.length === 0 });
-      setSavedAccounts(updated);
-      setSaveAccountModalVisible(false);
-      setAccountLabel('');
-      Alert.alert('Cuenta guardada', 'Podrás reutilizarla en futuras cuentas.');
-    } catch (error) {
-      Alert.alert('No se pudo guardar', error instanceof Error ? error.message : 'Error desconocido');
-    }
+
+    const updated = await saveTransferAccount({
+      label,
+      transfer,
+      isDefault: savedAccounts.length === 0,
+    });
+
+    setSavedAccounts(updated);
+    setSaveAccountModalVisible(false);
+    setAccountLabel('');
+    Alert.alert('Cuenta guardada', 'Podrás reutilizarla en futuras cuentas.');
   };
 
   const selectSavedAccount = (account: SavedTransferAccount) => {
@@ -317,12 +344,8 @@ ${people
   };
 
   const removeSavedAccount = async (id: string) => {
-    try {
-      const updated = await deleteTransferAccount(id);
-      setSavedAccounts(updated);
-    } catch (error) {
-      Alert.alert('No se pudo eliminar', error instanceof Error ? error.message : 'Error desconocido');
-    }
+    const updated = await deleteTransferAccount(id);
+    setSavedAccounts(updated);
   };
 
   const reset = () => {
@@ -343,96 +366,164 @@ ${people
         ref={scrollRef}
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
           <View>
-            <Text style={styles.eyebrow}>DIVIDE SIN ENREDOS</Text>
-            <Text style={styles.title}>Cuánto Pago</Text>
+            <Text style={styles.brand}>Cuánto Pago</Text>
+            <Text style={styles.subtitle}>Divide sin enredos</Text>
           </View>
-          <Text style={styles.stepCount}>{step + 1}/5</Text>
+          <View style={styles.stepPill}>
+            <Text style={styles.stepPillText}>{step + 1}/5</Text>
+          </View>
         </View>
 
-        <View style={styles.progressTrack}>
-          <View
-            style={[
-              styles.progressFill,
-              { width: `${((step + 1) / 5) * 100}%` },
-            ]}
-          />
+        <View style={styles.stepper}>
+          {STEPS.map((label, index) => {
+            const active = index === step;
+            const done = index < step;
+            return (
+              <Pressable
+                key={label}
+                style={styles.stepItem}
+                onPress={() => index < step && setStep(index)}
+              >
+                <View
+                  style={[
+                    styles.stepCircle,
+                    active && styles.stepCircleActive,
+                    done && styles.stepCircleDone,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.stepCircleText,
+                      (active || done) && styles.stepCircleTextActive,
+                    ]}
+                  >
+                    {done ? '✓' : STEP_ICONS[index]}
+                  </Text>
+                </View>
+                <Text
+                  style={[
+                    styles.stepName,
+                    active && styles.stepNameActive,
+                  ]}
+                >
+                  {label}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
-        <Text style={styles.stepLabel}>{STEPS[step]}</Text>
 
         {step === 0 && (
-          <Card>
-            <Text style={styles.cardTitle}>Sube la boleta</Text>
-            <Text style={styles.muted}>
-              Toma una foto clara o selecciona una imagen desde tu galería.
-            </Text>
-
-            {imageUri ? (
-              <Image source={{ uri: imageUri }} style={styles.receiptImage} />
-            ) : (
-              <View style={styles.placeholder}>
-                <Text style={styles.placeholderText}>🧾</Text>
-              </View>
-            )}
-
-            <View style={styles.row}>
-              <View style={styles.flex}>
-                <SecondaryButton
-                  label="📷 Cámara"
-                  onPress={() => pickImage(true)}
-                />
-              </View>
-              <View style={styles.flex}>
-                <SecondaryButton
-                  label="🖼️ Galería"
-                  onPress={() => pickImage(false)}
-                />
-              </View>
+          <>
+            <View style={styles.hero}>
+              <Text style={styles.heroEyebrow}>LECTURA CON IA</Text>
+              <Text style={styles.heroTitle}>Sube tu boleta</Text>
+              <Text style={styles.heroText}>
+                Toma una foto clara o elige una imagen de tu galería.
+              </Text>
             </View>
 
-            {TEST_RECEIPT_ENABLED && (
-              <SecondaryButton
-                label={
-                  loadingTestReceipt
-                    ? 'Cargando boleta de prueba…'
-                    : '🧪 Probar con boleta de ejemplo'
-                }
-                onPress={loadTestReceipt}
-                disabled={loadingTestReceipt || loading}
-              />
-            )}
+            <Card>
+              <View style={styles.receiptFrame}>
+                {imageUri ? (
+                  <Image
+                    source={{ uri: imageUri }}
+                    style={styles.receiptImage}
+                  />
+                ) : (
+                  <View style={styles.placeholder}>
+                    <View style={styles.receiptIllustration}>
+                      <Text style={styles.receiptIllustrationIcon}>🧾</Text>
+                    </View>
+                    <Text style={styles.placeholderTitle}>
+                      Tu boleta aparecerá aquí
+                    </Text>
+                    <Text style={styles.placeholderText}>
+                      Asegúrate de que se vea completa y sin reflejos.
+                    </Text>
+                  </View>
+                )}
+              </View>
 
-            {loading ? (
-              <ActivityIndicator size="large" />
-            ) : (
               <PrimaryButton
-                label="Leer boleta con Gemini"
-                onPress={scan}
-                disabled={!imageUri}
+                label="Tomar foto"
+                icon="📷"
+                onPress={() => pickImage(true)}
               />
-            )}
-          </Card>
+              <SecondaryButton
+                label="Elegir de galería"
+                icon="🖼️"
+                onPress={() => pickImage(false)}
+              />
+
+              {TEST_RECEIPT_ENABLED && (
+                <GhostButton
+                  label={
+                    loadingTestReceipt
+                      ? 'Cargando boleta de ejemplo…'
+                      : 'Probar con boleta de ejemplo'
+                  }
+                  icon="🧪"
+                  onPress={loadTestReceipt}
+                  disabled={loadingTestReceipt || loading}
+                />
+              )}
+
+              {loading ? (
+                <View style={styles.loadingBox}>
+                  <ActivityIndicator size="large" color="#149A8A" />
+                  <Text style={styles.loadingTitle}>
+                    Gemini está leyendo la boleta
+                  </Text>
+                  <Text style={styles.loadingText}>
+                    Esto puede tardar unos segundos.
+                  </Text>
+                </View>
+              ) : (
+                <PrimaryButton
+                  label="Leer boleta con Gemini"
+                  icon="✨"
+                  onPress={scan}
+                  disabled={!imageUri}
+                />
+              )}
+            </Card>
+          </>
         )}
 
         {step === 1 && (
           <Card>
-            <Text style={styles.cardTitle}>Revisa los productos</Text>
-            <Text style={styles.muted}>
-              Corrige nombres o precios antes de continuar.
-            </Text>
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={styles.cardTitle}>Productos detectados</Text>
+                <Text style={styles.muted}>
+                  Revisa nombres y precios antes de continuar.
+                </Text>
+              </View>
+              <View style={styles.countBadge}>
+                <Text style={styles.countBadgeText}>{items.length}</Text>
+              </View>
+            </View>
 
-            {items.map((item) => (
-              <View key={item.id} style={styles.itemEditor}>
+            {items.map((item, index) => (
+              <View key={item.id} style={styles.productRow}>
+                <View style={styles.quantityCircle}>
+                  <Text style={styles.quantityText}>
+                    {item.quantity || 1}
+                  </Text>
+                </View>
                 <TextInput
                   style={[styles.input, styles.flex]}
                   placeholder="Producto"
                   value={item.name}
                   onChangeText={(name) =>
                     setItems((current) =>
-                      current.map((x) =>
-                        x.id === item.id ? { ...x, name } : x,
+                      current.map((value) =>
+                        value.id === item.id ? { ...value, name } : value,
                       ),
                     )
                   }
@@ -444,14 +535,14 @@ ${people
                   value={item.price ? String(item.price) : ''}
                   onChangeText={(value) =>
                     setItems((current) =>
-                      current.map((x) =>
-                        x.id === item.id
+                      current.map((currentItem) =>
+                        currentItem.id === item.id
                           ? {
-                              ...x,
+                              ...currentItem,
                               price:
                                 Number(value.replace(/\D/g, '')) || 0,
                             }
-                          : x,
+                          : currentItem,
                       ),
                     )
                   }
@@ -459,7 +550,7 @@ ${people
                 <Pressable
                   onPress={() =>
                     setItems((current) =>
-                      current.filter((x) => x.id !== item.id),
+                      current.filter((value) => value.id !== item.id),
                     )
                   }
                 >
@@ -468,10 +559,19 @@ ${people
               </View>
             ))}
 
-            <SecondaryButton label="＋ Agregar producto" onPress={addItem} />
-            <Text style={styles.total}>
-              Total leído: {formatClp(totalReceipt)}
-            </Text>
+            <SecondaryButton
+              label="Agregar producto"
+              icon="＋"
+              onPress={addItem}
+            />
+
+            <View style={styles.totalCard}>
+              <Text style={styles.totalLabel}>Total leído</Text>
+              <Text style={styles.totalAmount}>
+                {formatClp(totalReceipt)}
+              </Text>
+            </View>
+
             <NavButtons
               back={() => setStep(0)}
               next={() => setStep(2)}
@@ -486,6 +586,10 @@ ${people
         {step === 2 && (
           <Card>
             <Text style={styles.cardTitle}>¿Quiénes participaron?</Text>
+            <Text style={styles.muted}>
+              Agrega a todas las personas que participaron de la cuenta.
+            </Text>
+
             <View style={styles.row}>
               <TextInput
                 style={[styles.input, styles.flex]}
@@ -504,8 +608,13 @@ ${people
                 <View key={`${person}-${index}`} style={styles.personRow}>
                   <PersonAvatar name={person} index={index} />
                   <Text style={styles.personName}>{person}</Text>
-                  {payer === person && <Text style={styles.payerBadge}>Pagó</Text>}
-                  <Pressable onPress={() => removePerson(person)} hitSlop={10}>
+                  {payer === person && (
+                    <Text style={styles.payerBadge}>Pagó</Text>
+                  )}
+                  <Pressable
+                    onPress={() => removePerson(person)}
+                    hitSlop={10}
+                  >
                     <Text style={styles.removePerson}>×</Text>
                   </Pressable>
                 </View>
@@ -522,28 +631,44 @@ ${people
 
         {step === 3 && (
           <Card>
-            <Text style={styles.cardTitle}>Reparte cada consumo</Text>
+            <Text style={styles.cardTitle}>Asigna los productos</Text>
+            <Text style={styles.muted}>
+              Toca una o varias personas para indicar quién consumió cada
+              producto.
+            </Text>
 
             {items.map((item) => (
               <View key={item.id} style={styles.assignmentCard}>
                 <View style={styles.spaceBetween}>
                   <Text style={styles.itemName}>{item.name}</Text>
-                  <Text style={styles.itemPrice}>{formatClp(item.price)}</Text>
+                  <Text style={styles.itemPrice}>
+                    {formatClp(item.price)}
+                  </Text>
                 </View>
 
                 <View style={styles.chips}>
                   {people.map((person, index) => {
-                    const selected = (assignments[item.id] || []).includes(person);
+                    const selected = (
+                      assignments[item.id] || []
+                    ).includes(person);
 
                     return (
                       <Pressable
                         key={`${person}-${index}`}
-                        style={[styles.personChip, selected && styles.personChipSelected]}
+                        style={[
+                          styles.personChip,
+                          selected && styles.personChipSelected,
+                        ]}
                         onPress={() =>
                           toggleAssignment(item.id, person)
                         }
                       >
-                        <PersonAvatar name={person} index={index} size={26} selected={selected} />
+                        <PersonAvatar
+                          name={person}
+                          index={index}
+                          size={28}
+                          selected={selected}
+                        />
                         <Text
                           style={[
                             styles.personChipText,
@@ -552,11 +677,22 @@ ${people
                         >
                           {person}
                         </Text>
-                        {selected && <Text style={styles.personChipCheck}>✓</Text>}
+                        {selected && (
+                          <Text style={styles.personChipCheck}>✓</Text>
+                        )}
                       </Pressable>
                     );
                   })}
                 </View>
+
+                {!!(assignments[item.id] || []).length && (
+                  <Text style={styles.assignmentHint}>
+                    Se divide entre {(assignments[item.id] || []).length}{' '}
+                    {(assignments[item.id] || []).length === 1
+                      ? 'persona'
+                      : 'personas'}
+                  </Text>
+                )}
               </View>
             ))}
 
@@ -571,178 +707,324 @@ ${people
         )}
 
         {step === 4 && (
-          <Card>
-            <Text style={styles.cardTitle}>Resumen y cobro</Text>
-            <Text style={styles.label}>¿Quién pagó?</Text>
-
-            <View style={styles.chips}>
-              {people.map((person, index) => (
-                <Pressable
-                  key={`${person}-${index}`}
-                  style={[
-                    styles.personChip,
-                    payer === person && styles.personChipSelected,
-                  ]}
-                  onPress={() => setPayer(person)}
-                >
-                  <PersonAvatar name={person} index={index} size={26} selected={payer === person} />
-                  <Text
-                    style={[
-                      styles.personChipText,
-                      payer === person && styles.personChipTextSelected,
-                    ]}
-                  >
-                    {person}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <Text style={styles.label}>Propina (%)</Text>
-            <TextInput
-              style={styles.input}
-              keyboardType="number-pad"
-              value={tipPercent}
-              onChangeText={setTipPercent}
-            />
-
-            <View style={styles.spaceBetween}>
-              <Text style={styles.label}>
-                Incluir datos de transferencia
+          <>
+            <Card>
+              <Text style={styles.cardTitle}>Datos para cobrar</Text>
+              <Text style={styles.muted}>
+                Elige quién pagó y agrega los datos donde quieres recibir el
+                dinero.
               </Text>
-              <Switch
-                value={includeTransfer}
-                onValueChange={setIncludeTransfer}
+
+              <Text style={styles.label}>¿Quién pagó?</Text>
+              <View style={styles.chips}>
+                {people.map((person, index) => (
+                  <Pressable
+                    key={`${person}-${index}`}
+                    style={[
+                      styles.personChip,
+                      payer === person && styles.personChipSelected,
+                    ]}
+                    onPress={() => setPayer(person)}
+                  >
+                    <PersonAvatar
+                      name={person}
+                      index={index}
+                      size={28}
+                      selected={payer === person}
+                    />
+                    <Text
+                      style={[
+                        styles.personChipText,
+                        payer === person &&
+                          styles.personChipTextSelected,
+                      ]}
+                    >
+                      {person}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <Text style={styles.label}>Propina (%)</Text>
+              <TextInput
+                style={styles.input}
+                keyboardType="number-pad"
+                value={tipPercent}
+                onChangeText={setTipPercent}
               />
-            </View>
 
-            {includeTransfer && (
-              <>
-                <View style={styles.transferActions}>
-                  <View style={styles.flex}>
-                    <SecondaryButton label="📋 Pegar desde banco" onPress={pasteTransferData} />
+              <View style={styles.spaceBetween}>
+                <Text style={styles.label}>
+                  Incluir datos de transferencia
+                </Text>
+                <Switch
+                  value={includeTransfer}
+                  onValueChange={setIncludeTransfer}
+                  trackColor={{ true: '#9CE2D6', false: '#D7DDE0' }}
+                  thumbColor={includeTransfer ? '#149A8A' : '#FFFFFF'}
+                />
+              </View>
+
+              {includeTransfer && (
+                <>
+                  <View style={styles.transferActions}>
+                    <View style={styles.flex}>
+                      <SecondaryButton
+                        label="Pegar desde banco"
+                        icon="📋"
+                        onPress={pasteTransferData}
+                      />
+                    </View>
+                    <View style={styles.flex}>
+                      <SecondaryButton
+                        label="Mis cuentas"
+                        icon="🏦"
+                        onPress={() =>
+                          setAccountsModalVisible(true)
+                        }
+                      />
+                    </View>
                   </View>
-                  <View style={styles.flex}>
-                    <SecondaryButton label="🏦 Mis cuentas" onPress={() => setAccountsModalVisible(true)} />
+
+                  <View style={styles.transferBox}>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Banco — Ej: BancoEstado"
+                      placeholderTextColor="#92929A"
+                      value={transfer.bank}
+                      onChangeText={(bank) =>
+                        setTransfer((current) => ({
+                          ...current,
+                          bank,
+                        }))
+                      }
+                    />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Tipo de cuenta — Ej: Cuenta RUT"
+                      placeholderTextColor="#92929A"
+                      value={transfer.accountType}
+                      onChangeText={(accountType) =>
+                        setTransfer((current) => ({
+                          ...current,
+                          accountType,
+                        }))
+                      }
+                    />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Número de cuenta — Ej: 12345678"
+                      placeholderTextColor="#92929A"
+                      keyboardType="number-pad"
+                      value={transfer.accountNumber}
+                      onChangeText={(accountNumber) =>
+                        setTransfer((current) => ({
+                          ...current,
+                          accountNumber,
+                        }))
+                      }
+                    />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="RUT — Ej: 12.345.678-9"
+                      placeholderTextColor="#92929A"
+                      autoCapitalize="characters"
+                      value={transfer.rut}
+                      onChangeText={(rut) =>
+                        setTransfer((current) => ({
+                          ...current,
+                          rut,
+                        }))
+                      }
+                    />
+
+                    <GhostButton
+                      label="Guardar en Mis cuentas"
+                      icon="＋"
+                      onPress={openSaveAccount}
+                    />
+                    <Text style={styles.localDataHint}>
+                      🔒 Tus datos se guardan solo en este dispositivo.
+                    </Text>
                   </View>
-                </View>
-                <View style={styles.transferBox}>
-                  <TextInput style={styles.input} placeholder="Banco — Ej: BancoEstado" placeholderTextColor="#92929A" value={transfer.bank} onChangeText={(bank) => setTransfer((x) => ({ ...x, bank }))} />
-                  <TextInput style={styles.input} placeholder="Tipo de cuenta — Ej: Cuenta RUT" placeholderTextColor="#92929A" value={transfer.accountType} onChangeText={(accountType) => setTransfer((x) => ({ ...x, accountType }))} />
-                  <TextInput style={styles.input} placeholder="Número de cuenta — Ej: 12345678" placeholderTextColor="#92929A" keyboardType="number-pad" value={transfer.accountNumber} onChangeText={(accountNumber) => setTransfer((x) => ({ ...x, accountNumber }))} />
-                  <TextInput style={styles.input} placeholder="RUT — Ej: 12.345.678-9" placeholderTextColor="#92929A" autoCapitalize="characters" value={transfer.rut} onChangeText={(rut) => setTransfer((x) => ({ ...x, rut }))} />
-                  <SecondaryButton label="Guardar en Mis cuentas" onPress={openSaveAccount} />
-                  <Text style={styles.localDataHint}>🔒 Se guarda solo en este dispositivo.</Text>
-                </View>
-              </>
-            )}
+                </>
+              )}
+            </Card>
 
-            <View style={styles.summaryBox}>
-              {people.map((person, index) => (
-                <View key={`${person}-${index}`} style={styles.summaryRow}>
-                  <PersonAvatar name={person} index={index} size={34} />
-                  <Text style={styles.summaryPerson}>
-                    {person}
-                    {person === payer ? ' (pagó)' : ''}
-                  </Text>
-                  <Text style={styles.summaryAmount}>
-                    {formatClp(totals[person] || 0)}
-                  </Text>
-                </View>
-              ))}
-            </View>
+            <Card tone="dark">
+              <Text style={styles.darkEyebrow}>RESUMEN FINAL</Text>
+              <Text style={styles.darkTitle}>
+                ¡Listo! Así queda la cuenta
+              </Text>
 
-            <PrimaryButton
-              label="Compartir resumen grupal"
-              onPress={() =>
-                shareOnWhatsApp(groupMessage).catch((error) =>
-                  Alert.alert('Error', error.message),
-                )
-              }
-            />
+              <View style={styles.summaryTotalCard}>
+                <Text style={styles.summaryTotalLabel}>
+                  Total de la cuenta
+                </Text>
+                <Text style={styles.summaryTotalAmount}>
+                  {formatClp(
+                    Object.values(totals).reduce(
+                      (sum, value) => sum + value,
+                      0,
+                    ),
+                  )}
+                </Text>
+                <Text style={styles.summaryPayer}>
+                  Pagó: {payer || 'Selecciona una persona'}
+                </Text>
+              </View>
 
-            {includeTransfer && (
-              <SecondaryButton
-                label="Compartir datos de transferencia"
+              <View style={styles.summaryList}>
+                {people.map((person, index) => (
+                  <View
+                    key={`${person}-${index}`}
+                    style={styles.summaryRow}
+                  >
+                    <PersonAvatar
+                      name={person}
+                      index={index}
+                      size={36}
+                    />
+                    <View style={styles.flex}>
+                      <Text style={styles.summaryPerson}>
+                        {person}
+                        {person === payer ? ' (pagó)' : ''}
+                      </Text>
+                      <Text style={styles.summaryDetail}>
+                        {person === payer
+                          ? 'Consumo personal'
+                          : totals[person]
+                            ? 'Debe transferir'
+                            : 'Sin deuda'}
+                      </Text>
+                    </View>
+                    <Text style={styles.summaryAmount}>
+                      {formatClp(totals[person] || 0)}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+
+              <View style={styles.recoverCard}>
+                <Text style={styles.recoverLabel}>
+                  {payer || 'Quien pagó'} debe recuperar
+                </Text>
+                <Text style={styles.recoverAmount}>
+                  {formatClp(recoverAmount)}
+                </Text>
+              </View>
+
+              <PrimaryButton
+                label="Compartir por WhatsApp"
+                icon="💬"
                 onPress={() =>
-                  shareOnWhatsApp(transferMessage).catch((error) =>
+                  shareOnWhatsApp(groupMessage).catch((error) =>
                     Alert.alert('Error', error.message),
                   )
                 }
               />
-            )}
 
-            {people
-              .filter((person) => person !== payer)
-              .map((person) => (
+              {includeTransfer && (
                 <SecondaryButton
-                  key={person}
-                  label={`Cobrar a ${person}: ${formatClp(
-                    totals[person] || 0,
-                  )}`}
-                  onPress={() => {
-                    const message = `¡Hola ${person}! 👋 Tu parte de la cuenta es ${formatClp(
-                      totals[person] || 0,
-                    )} (incluye ${
-                      Number(tipPercent) || 0
-                    }% de propina).${
-                      includeTransfer ? `\n\n${transferMessage}` : ''
-                    }`;
-
-                    shareOnWhatsApp(message).catch((error) =>
-                      Alert.alert('Error', error.message),
-                    );
-                  }}
+                  label="Compartir datos de transferencia"
+                  icon="🏦"
+                  onPress={() =>
+                    shareOnWhatsApp(transferMessage).catch(
+                      (error) =>
+                        Alert.alert('Error', error.message),
+                    )
+                  }
                 />
-              ))}
+              )}
 
-            <NavButtons
-              back={() => setStep(3)}
-              next={reset}
-              nextLabel="Nueva cuenta"
-            />
-          </Card>
+              {people
+                .filter((person) => person !== payer)
+                .map((person) => (
+                  <SecondaryButton
+                    key={person}
+                    label={`Cobrar a ${person}: ${formatClp(
+                      totals[person] || 0,
+                    )}`}
+                    onPress={() => {
+                      const message = `¡Hola ${person}! 👋 Tu parte de la cuenta es ${formatClp(
+                        totals[person] || 0,
+                      )} (incluye ${
+                        Number(tipPercent) || 0
+                      }% de propina).${
+                        includeTransfer
+                          ? `\n\n${transferMessage}`
+                          : ''
+                      }`;
+
+                      shareOnWhatsApp(message).catch((error) =>
+                        Alert.alert('Error', error.message),
+                      );
+                    }}
+                  />
+                ))}
+
+              <View style={styles.row}>
+                <View style={styles.flex}>
+                  <SecondaryButton
+                    label="Atrás"
+                    onPress={() => setStep(3)}
+                  />
+                </View>
+                <View style={styles.flex}>
+                  <PrimaryButton
+                    label="Nueva cuenta"
+                    onPress={reset}
+                  />
+                </View>
+              </View>
+            </Card>
+          </>
         )}
       </ScrollView>
 
-      <Modal visible={accountsModalVisible} transparent animationType="slide" onRequestClose={() => setAccountsModalVisible(false)}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={styles.spaceBetween}>
-              <Text style={styles.modalTitle}>Mis cuentas</Text>
-              <Pressable onPress={() => setAccountsModalVisible(false)} hitSlop={10}><Text style={styles.modalClose}>×</Text></Pressable>
-            </View>
-            {!savedAccounts.length ? (
-              <Text style={styles.muted}>Aún no tienes cuentas guardadas. Completa los datos y pulsa “Guardar en Mis cuentas”.</Text>
-            ) : savedAccounts.map((account) => (
-              <View key={account.id} style={styles.savedAccount}>
-                <Pressable style={styles.savedAccountMain} onPress={() => selectSavedAccount(account)}>
-                  <View style={styles.bankAvatar}><Text style={styles.bankAvatarText}>{account.label.charAt(0).toUpperCase()}</Text></View>
-                  <View style={styles.flex}>
-                    <Text style={styles.savedAccountLabel}>{account.label}</Text>
-                    <Text style={styles.savedAccountDetail}>{account.transfer.bank} · {account.transfer.accountType}</Text>
-                    <Text style={styles.savedAccountDetail}>••••{account.transfer.accountNumber.slice(-4)}</Text>
-                  </View>
-                  {account.isDefault && <Text style={styles.defaultBadge}>Principal</Text>}
-                </Pressable>
-                <Pressable onPress={() => Alert.alert('Eliminar cuenta', `¿Eliminar “${account.label}”?`, [{ text: 'Cancelar', style: 'cancel' }, { text: 'Eliminar', style: 'destructive', onPress: () => removeSavedAccount(account.id) }])}>
-                  <Text style={styles.deleteAccount}>Eliminar</Text>
-                </Pressable>
-              </View>
-            ))}
-          </View>
-        </View>
-      </Modal>
+      <AccountsModal
+        visible={accountsModalVisible}
+        accounts={savedAccounts}
+        onClose={() => setAccountsModalVisible(false)}
+        onSelect={selectSavedAccount}
+        onDelete={removeSavedAccount}
+      />
 
-      <Modal visible={saveAccountModalVisible} transparent animationType="fade" onRequestClose={() => setSaveAccountModalVisible(false)}>
+      <Modal
+        visible={saveAccountModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSaveAccountModalVisible(false)}
+      >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Guardar cuenta</Text>
-            <Text style={styles.muted}>Ponle un nombre fácil de reconocer.</Text>
-            <TextInput style={styles.input} placeholder="Ej: Cuenta personal" value={accountLabel} onChangeText={setAccountLabel} autoFocus />
+            <Text style={styles.muted}>
+              Ponle un nombre fácil de reconocer.
+            </Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Ej: Cuenta personal"
+              value={accountLabel}
+              onChangeText={setAccountLabel}
+              autoFocus
+            />
             <View style={styles.row}>
-              <View style={styles.flex}><SecondaryButton label="Cancelar" onPress={() => setSaveAccountModalVisible(false)} /></View>
-              <View style={styles.flex}><PrimaryButton label="Guardar" onPress={confirmSaveAccount} disabled={!accountLabel.trim()} /></View>
+              <View style={styles.flex}>
+                <SecondaryButton
+                  label="Cancelar"
+                  onPress={() =>
+                    setSaveAccountModalVisible(false)
+                  }
+                />
+              </View>
+              <View style={styles.flex}>
+                <PrimaryButton
+                  label="Guardar"
+                  onPress={confirmSaveAccount}
+                  disabled={!accountLabel.trim()}
+                />
+              </View>
             </View>
           </View>
         </View>
@@ -751,14 +1033,142 @@ ${people
   );
 }
 
-function PersonAvatar({ name, index, size = 36, selected = false }: { name: string; index: number; size?: number; selected?: boolean }) {
-  const colors = ['#0F766E', '#2563EB', '#7C3AED', '#DB2777', '#D97706', '#0891B2', '#4F46E5', '#059669'];
+function AccountsModal({
+  visible,
+  accounts,
+  onClose,
+  onSelect,
+  onDelete,
+}: {
+  visible: boolean;
+  accounts: SavedTransferAccount[];
+  onClose: () => void;
+  onSelect: (account: SavedTransferAccount) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalBackdrop}>
+        <View style={styles.modalCard}>
+          <View style={styles.spaceBetween}>
+            <Text style={styles.modalTitle}>Mis cuentas</Text>
+            <Pressable onPress={onClose} hitSlop={10}>
+              <Text style={styles.modalClose}>×</Text>
+            </Pressable>
+          </View>
+
+          {!accounts.length ? (
+            <Text style={styles.muted}>
+              Aún no tienes cuentas guardadas.
+            </Text>
+          ) : (
+            accounts.map((account) => (
+              <View key={account.id} style={styles.savedAccount}>
+                <Pressable
+                  style={styles.savedAccountMain}
+                  onPress={() => onSelect(account)}
+                >
+                  <View style={styles.bankAvatar}>
+                    <Text style={styles.bankAvatarText}>
+                      {account.label.charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={styles.flex}>
+                    <Text style={styles.savedAccountLabel}>
+                      {account.label}
+                    </Text>
+                    <Text style={styles.savedAccountDetail}>
+                      {account.transfer.bank} ·{' '}
+                      {account.transfer.accountType}
+                    </Text>
+                    <Text style={styles.savedAccountDetail}>
+                      ••••{account.transfer.accountNumber.slice(-4)}
+                    </Text>
+                  </View>
+                  {account.isDefault && (
+                    <Text style={styles.defaultBadge}>Principal</Text>
+                  )}
+                </Pressable>
+
+                <Pressable
+                  onPress={() =>
+                    Alert.alert(
+                      'Eliminar cuenta',
+                      `¿Eliminar “${account.label}”?`,
+                      [
+                        { text: 'Cancelar', style: 'cancel' },
+                        {
+                          text: 'Eliminar',
+                          style: 'destructive',
+                          onPress: () => onDelete(account.id),
+                        },
+                      ],
+                    )
+                  }
+                >
+                  <Text style={styles.deleteAccount}>Eliminar</Text>
+                </Pressable>
+              </View>
+            ))
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function PersonAvatar({
+  name,
+  index,
+  size = 38,
+  selected = false,
+}: {
+  name: string;
+  index: number;
+  size?: number;
+  selected?: boolean;
+}) {
+  const colors = [
+    '#0F766E',
+    '#2563EB',
+    '#7C3AED',
+    '#DB2777',
+    '#D97706',
+    '#0891B2',
+    '#4F46E5',
+    '#059669',
+  ];
   const color = colors[index % colors.length];
   const initial = name.trim().charAt(0).toUpperCase() || '?';
 
   return (
-    <View style={[styles.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: selected ? '#FFFFFF' : color }]}>
-      <Text style={[styles.avatarText, { fontSize: Math.max(12, size * 0.42), color: selected ? '#0D1B2A' : '#FFFFFF' }]}>{initial}</Text>
+    <View
+      style={[
+        styles.avatar,
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: selected ? '#FFFFFF' : color,
+        },
+      ]}
+    >
+      <Text
+        style={[
+          styles.avatarText,
+          {
+            fontSize: Math.max(12, size * 0.42),
+            color: selected ? '#0D1B2A' : '#FFFFFF',
+          },
+        ]}
+      >
+        {initial}
+      </Text>
     </View>
   );
 }
@@ -767,12 +1177,10 @@ function NavButtons({
   back,
   next,
   nextDisabled = false,
-  nextLabel = 'Siguiente',
 }: {
   back: () => void;
   next: () => void;
   nextDisabled?: boolean;
-  nextLabel?: string;
 }) {
   return (
     <View style={styles.row}>
@@ -781,7 +1189,7 @@ function NavButtons({
       </View>
       <View style={styles.flex}>
         <PrimaryButton
-          label={nextLabel}
+          label="Continuar"
           onPress={next}
           disabled={nextDisabled}
         />
@@ -791,98 +1199,304 @@ function NavButtons({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#F6F5F2' },
+  safe: { flex: 1, backgroundColor: '#F4F7F8' },
   flex: { flex: 1 },
-  container: { padding: 20, paddingBottom: 48, gap: 14 },
+  container: {
+    padding: 18,
+    paddingBottom: 48,
+    gap: 16,
+    maxWidth: 720,
+    width: '100%',
+    alignSelf: 'center',
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  eyebrow: {
-    fontSize: 11,
-    letterSpacing: 2.2,
-    color: '#797981',
-    fontWeight: '800',
-  },
-  title: {
-    fontSize: 34,
+  brand: {
+    fontSize: 28,
     fontWeight: '900',
-    color: '#17171B',
-    marginTop: 3,
+    color: '#0D1B2A',
   },
-  stepCount: { fontSize: 15, fontWeight: '800', color: '#5E5E67' },
-  progressTrack: {
-    height: 7,
-    borderRadius: 10,
-    backgroundColor: '#E0DFDB',
+  subtitle: {
+    color: '#6B7680',
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  stepPill: {
+    backgroundColor: '#E3F5F1',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+  },
+  stepPillText: {
+    color: '#117C70',
+    fontWeight: '900',
+  },
+  stepper: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E8ECEF',
+  },
+  stepItem: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 5,
+  },
+  stepCircle: {
+    width: 31,
+    height: 31,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F0F3F5',
+  },
+  stepCircleActive: {
+    backgroundColor: '#149A8A',
+  },
+  stepCircleDone: {
+    backgroundColor: '#CDEDE7',
+  },
+  stepCircleText: {
+    fontSize: 13,
+    color: '#7A858E',
+    fontWeight: '900',
+  },
+  stepCircleTextActive: {
+    color: '#FFFFFF',
+  },
+  stepName: {
+    fontSize: 10,
+    color: '#8A939A',
+    fontWeight: '700',
+  },
+  stepNameActive: {
+    color: '#149A8A',
+    fontWeight: '900',
+  },
+  hero: {
+    paddingHorizontal: 4,
+    paddingTop: 8,
+  },
+  heroEyebrow: {
+    color: '#149A8A',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.8,
+  },
+  heroTitle: {
+    fontSize: 30,
+    fontWeight: '900',
+    color: '#0D1B2A',
+    marginTop: 4,
+  },
+  heroText: {
+    color: '#6B7680',
+    fontSize: 15,
+    lineHeight: 22,
+    marginTop: 5,
+  },
+  receiptFrame: {
+    borderRadius: 20,
     overflow: 'hidden',
+    backgroundColor: '#F7FAFB',
+    borderWidth: 1,
+    borderColor: '#E1E7EA',
   },
-  progressFill: { height: '100%', backgroundColor: '#FF6B4A' },
-  stepLabel: { color: '#5E5E67', fontWeight: '700', marginBottom: 4 },
-  cardTitle: { fontSize: 23, fontWeight: '900', color: '#19191F' },
-  muted: { fontSize: 15, lineHeight: 21, color: '#6D6D75' },
   receiptImage: {
     width: '100%',
     height: 300,
-    borderRadius: 16,
     resizeMode: 'contain',
-    backgroundColor: '#F0F0F0',
   },
   placeholder: {
-    height: 220,
+    height: 250,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#F3F2EF',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#DFDED9',
-    borderStyle: 'dashed',
+    padding: 24,
   },
-  placeholderText: { fontSize: 64 },
-  row: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  receiptIllustration: {
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    backgroundColor: '#DFF5F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  receiptIllustrationIcon: {
+    fontSize: 48,
+  },
+  placeholderTitle: {
+    color: '#17202A',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  placeholderText: {
+    color: '#7C858D',
+    textAlign: 'center',
+    marginTop: 6,
+    lineHeight: 20,
+  },
+  loadingBox: {
+    alignItems: 'center',
+    paddingVertical: 14,
+  },
+  loadingTitle: {
+    color: '#17202A',
+    fontWeight: '900',
+    fontSize: 16,
+    marginTop: 10,
+  },
+  loadingText: {
+    color: '#7A848C',
+    marginTop: 4,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  cardTitle: {
+    fontSize: 23,
+    fontWeight: '900',
+    color: '#17202A',
+  },
+  muted: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#6D7780',
+    marginTop: 3,
+  },
+  countBadge: {
+    minWidth: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#DFF5F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  countBadgeText: {
+    color: '#117C70',
+    fontWeight: '900',
+  },
+  row: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+  },
   input: {
     minHeight: 50,
     borderWidth: 1,
-    borderColor: '#DAD9DE',
+    borderColor: '#D8DEE2',
     backgroundColor: '#FFFFFF',
     borderRadius: 14,
     paddingHorizontal: 14,
     fontSize: 16,
-    color: '#1F1F24',
+    color: '#1F2933',
   },
-  priceInput: { width: 112 },
-  itemEditor: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  delete: { fontSize: 30, color: '#B54A43', paddingHorizontal: 4 },
-  total: { fontSize: 18, fontWeight: '900', textAlign: 'right' },
+  productRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+  },
+  quantityCircle: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#EDF2F4',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quantityText: {
+    fontWeight: '900',
+    color: '#53606A',
+  },
+  priceInput: {
+    width: 108,
+  },
+  delete: {
+    fontSize: 28,
+    color: '#B65049',
+    paddingHorizontal: 3,
+  },
+  totalCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#EAF8F5',
+    borderRadius: 18,
+    padding: 16,
+  },
+  totalLabel: {
+    color: '#46615C',
+    fontWeight: '800',
+  },
+  totalAmount: {
+    color: '#0E6E63',
+    fontSize: 21,
+    fontWeight: '900',
+  },
   addButton: {
     height: 50,
     paddingHorizontal: 16,
     borderRadius: 14,
-    backgroundColor: '#FF6B4A',
+    backgroundColor: '#149A8A',
     justifyContent: 'center',
   },
-  addButtonText: { color: 'white', fontWeight: '800' },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  peopleList: { gap: 8 },
-  personRow: { flexDirection: 'row', alignItems: 'center', minHeight: 54, gap: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#ECEBF0' },
-  personName: { flex: 1, fontSize: 16, fontWeight: '800' },
-  payerBadge: { color: '#087F5B', backgroundColor: '#DDF7EE', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, fontWeight: '800', fontSize: 12 },
-  removePerson: { fontSize: 26, color: '#A1443E' },
-  avatar: { alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontWeight: '900' },
-  chip: {
-    backgroundColor: '#EEEDE9',
-    borderRadius: 999,
-    paddingVertical: 9,
-    paddingHorizontal: 13,
+  addButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '900',
   },
-  chipText: { color: '#33333A', fontWeight: '700' },
+  peopleList: {
+    gap: 4,
+  },
+  personRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 58,
+    gap: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEF1F3',
+  },
+  personName: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#17202A',
+  },
+  payerBadge: {
+    color: '#087F5B',
+    backgroundColor: '#DDF7EE',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  removePerson: {
+    fontSize: 26,
+    color: '#A1443E',
+  },
+  avatar: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: {
+    fontWeight: '900',
+  },
   assignmentCard: {
     gap: 12,
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#ECEBF0',
+    borderBottomColor: '#ECEFF1',
   },
   spaceBetween: {
     flexDirection: 'row',
@@ -890,8 +1504,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
-  itemName: { fontSize: 17, fontWeight: '800', flex: 1 },
-  itemPrice: { fontSize: 16, fontWeight: '800' },
+  itemName: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: '#17202A',
+    flex: 1,
+  },
+  itemPrice: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#17202A',
+  },
+  chips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
   personChip: {
     minHeight: 42,
     flexDirection: 'row',
@@ -899,45 +1527,198 @@ const styles = StyleSheet.create({
     gap: 7,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#D5D4D9',
-    paddingVertical: 9,
-    paddingHorizontal: 13,
+    borderColor: '#D5DDE1',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
   },
   personChipSelected: {
-    backgroundColor: '#19191F',
-    borderColor: '#19191F',
+    backgroundColor: '#0D1B2A',
+    borderColor: '#0D1B2A',
   },
-  personChipText: { color: '#414149', fontWeight: '700' },
-  personChipTextSelected: { color: '#FFFFFF' },
-  personChipCheck: { color: '#64E8CD', fontWeight: '900' },
-  label: { fontSize: 15, color: '#4F4F57', fontWeight: '800' },
-  transferActions: { flexDirection: 'row', gap: 10 },
+  personChipText: {
+    color: '#414B53',
+    fontWeight: '800',
+  },
+  personChipTextSelected: {
+    color: '#FFFFFF',
+  },
+  personChipCheck: {
+    color: '#64E8CD',
+    fontWeight: '900',
+  },
+  assignmentHint: {
+    color: '#6C777F',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  label: {
+    fontSize: 14,
+    color: '#46515A',
+    fontWeight: '900',
+  },
+  transferActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
   transferBox: {
     gap: 10,
-    backgroundColor: '#F5F4F1',
+    backgroundColor: '#F5F8F9',
     padding: 12,
-    borderRadius: 16,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E3E8EB',
   },
-  localDataHint: { textAlign: 'center', color: '#6D6D75', fontSize: 12, fontWeight: '700' },
-  summaryBox: {
+  localDataHint: {
+    textAlign: 'center',
+    color: '#6D7780',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  darkEyebrow: {
+    color: '#64E8CD',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.7,
+  },
+  darkTitle: {
+    color: '#FFFFFF',
+    fontSize: 24,
+    fontWeight: '900',
+  },
+  summaryTotalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 18,
+    alignItems: 'center',
+  },
+  summaryTotalLabel: {
+    color: '#68747D',
+    fontWeight: '800',
+  },
+  summaryTotalAmount: {
+    color: '#0D1B2A',
+    fontSize: 30,
+    fontWeight: '900',
+    marginTop: 5,
+  },
+  summaryPayer: {
+    color: '#149A8A',
+    fontWeight: '900',
+    marginTop: 8,
+  },
+  summaryList: {
+    gap: 10,
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+    backgroundColor: '#15283B',
+    borderRadius: 16,
+    padding: 12,
+  },
+  summaryPerson: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  summaryDetail: {
+    color: '#B7C3CD',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  summaryAmount: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  recoverCard: {
+    backgroundColor: '#DFF5F0',
+    borderRadius: 18,
+    padding: 16,
+    alignItems: 'center',
+  },
+  recoverLabel: {
+    color: '#2D5D56',
+    fontWeight: '800',
+  },
+  recoverAmount: {
+    color: '#0F766E',
+    fontSize: 28,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(13,27,42,0.48)',
+  },
+  modalCard: {
+    gap: 14,
+    backgroundColor: '#FFFFFF',
+    padding: 20,
+    paddingBottom: 34,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    maxHeight: '82%',
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#17202A',
+  },
+  modalClose: {
+    fontSize: 30,
+    color: '#59636E',
+  },
+  savedAccount: {
+    borderWidth: 1,
+    borderColor: '#E1E5E8',
+    borderRadius: 16,
+    padding: 12,
+    gap: 8,
+  },
+  savedAccountMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 12,
-    padding: 14,
-    borderRadius: 16,
-    backgroundColor: '#FFF1ED',
   },
-  summaryRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  summaryPerson: { fontSize: 16, fontWeight: '700', flex: 1 },
-  summaryAmount: { fontSize: 17, fontWeight: '900' },
-  modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(13,27,42,0.45)' },
-  modalCard: { gap: 14, backgroundColor: '#FFFFFF', padding: 20, paddingBottom: 34, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '80%' },
-  modalTitle: { fontSize: 22, fontWeight: '900', color: '#17202A' },
-  modalClose: { fontSize: 30, color: '#59636E' },
-  savedAccount: { borderWidth: 1, borderColor: '#E1E5E8', borderRadius: 16, padding: 12, gap: 8 },
-  savedAccountMain: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  bankAvatar: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#0D1B2A', alignItems: 'center', justifyContent: 'center' },
-  bankAvatarText: { color: '#FFFFFF', fontSize: 18, fontWeight: '900' },
-  savedAccountLabel: { fontSize: 16, fontWeight: '900', color: '#17202A' },
-  savedAccountDetail: { fontSize: 13, color: '#6D6D75', marginTop: 2 },
-  defaultBadge: { color: '#087F5B', backgroundColor: '#DDF7EE', borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5, fontWeight: '800', fontSize: 11 },
-  deleteAccount: { textAlign: 'right', color: '#A1443E', fontWeight: '800' },
+  bankAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#0D1B2A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bankAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  savedAccountLabel: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#17202A',
+  },
+  savedAccountDetail: {
+    fontSize: 13,
+    color: '#6D7780',
+    marginTop: 2,
+  },
+  defaultBadge: {
+    color: '#087F5B',
+    backgroundColor: '#DDF7EE',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    fontWeight: '800',
+    fontSize: 11,
+  },
+  deleteAccount: {
+    textAlign: 'right',
+    color: '#A1443E',
+    fontWeight: '800',
+  },
 });
