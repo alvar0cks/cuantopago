@@ -5,20 +5,64 @@ export function Card({ children }: PropsWithChildren) {
   return <View style={styles.card}>{children}</View>;
 }
 
-export function PrimaryButton({ label, onPress, disabled = false }: { label: string; onPress: () => void; disabled?: boolean }) {
-  return (
-    <Pressable onPress={onPress} disabled={disabled} style={({ pressed }) => [styles.primary, pressed && styles.pressed, disabled && styles.disabled]}>
-      <Text style={styles.primaryText}>{label}</Text>
-    </Pressable>
-  );
+export function PrimaryButton({
+label,
+onPress,
+disabled = false,
+}: {
+label: string;
+onPress: () => void;
+disabled?: boolean;
+}) {
+return (
+<Pressable
+style={[
+styles.primary,
+disabled && styles.buttonDisabled,
+]}
+onPress={onPress}
+disabled={disabled}
+>
+<Text
+style={[
+styles.primaryText,
+disabled && styles.buttonTextDisabled,
+]}
+>
+{label}
+</Text>
+</Pressable>
+);
 }
 
-export function SecondaryButton({ label, onPress }: { label: string; onPress: () => void }) {
-  return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}>
-      <Text style={styles.secondaryText}>{label}</Text>
-    </Pressable>
-  );
+export function SecondaryButton({
+label,
+onPress,
+disabled = false,
+}: {
+label: string;
+onPress: () => void;
+disabled?: boolean;
+}) {
+return (
+<Pressable
+style={[
+styles.secondary,
+disabled && styles.buttonDisabled,
+]}
+onPress={onPress}
+disabled={disabled}
+>
+<Text
+style={[
+styles.secondaryText,
+disabled && styles.buttonTextDisabled,
+]}
+>
+{label}
+</Text>
+</Pressable>
+);
 }
 
 const styles = StyleSheet.create({
@@ -51,4 +95,11 @@ const styles = StyleSheet.create({
   secondaryText: { color: '#25252B', fontSize: 15, fontWeight: '700' },
   pressed: { opacity: 0.72 },
   disabled: { opacity: 0.4 },
+  buttonDisabled: {
+opacity: 0.5,
+},
+
+buttonTextDisabled: {
+opacity: 0.8,
+},
 });
