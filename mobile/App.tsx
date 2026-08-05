@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Asset } from 'expo-asset';
+import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { StatusBar } from 'expo-status-bar';
 import {
@@ -7,6 +8,7 @@ import {
   Alert,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -19,8 +21,15 @@ import {
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Card, PrimaryButton, SecondaryButton } from './src/components/Ui';
 import { analyzeReceipt } from './src/services/api';
+import {
+  deleteTransferAccount,
+  loadTransferAccounts,
+  saveTransferAccount,
+  type SavedTransferAccount,
+} from './src/services/transferAccounts';
 import type { ReceiptItem, TransferData } from './src/types';
 import { formatClp } from './src/utils/money';
+import { parseTransferText } from './src/utils/transferParser';
 import { shareOnWhatsApp } from './src/utils/share';
 
 const STEPS = ['Boleta', 'Productos', 'Personas', 'Reparto', 'Cobro'];
@@ -61,15 +70,26 @@ function Main() {
     accountNumber: '',
     rut: '',
   });
+  const [savedAccounts, setSavedAccounts] = useState<SavedTransferAccount[]>([]);
+  const [accountsModalVisible, setAccountsModalVisible] = useState(false);
+  const [saveAccountModalVisible, setSaveAccountModalVisible] = useState(false);
+  const [accountLabel, setAccountLabel] = useState('');
 
-useEffect(() => {
-  requestAnimationFrame(() => {
-    scrollRef.current?.scrollTo({
-      y: 0,
-      animated: true,
+  useEffect(() => {
+    loadTransferAccounts()
+      .then((accounts) => {
+        setSavedAccounts(accounts);
+        const preferred = accounts.find((account) => account.isDefault) ?? accounts[0];
+        if (preferred) setTransfer(preferred.transfer);
+      })
+      .catch((error) => console.error('[Cuánto Pago] Error cargando cuentas:', error));
+  }, []);
+
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
     });
-  });
-}, [step]);
+  }, [step]);
 
   const selectImage = (uri: string, mimeType = 'image/jpeg') => {
     setImageUri(uri);
@@ -110,37 +130,27 @@ useEffect(() => {
    * Se usa para Firebase Test Lab y pruebas automatizadas, sin cámara ni galería.
    */
   const loadTestReceipt = async () => {
-  setLoadingTestReceipt(true);
+    setLoadingTestReceipt(true);
 
-  try {
-    const [asset] = await Asset.loadAsync(TEST_RECEIPT_MODULE);
+    try {
+      const [asset] = await Asset.loadAsync(TEST_RECEIPT_MODULE);
 
-    if (!asset.localUri) {
-      throw new Error(
-        'La imagen de prueba no pudo copiarse al almacenamiento temporal.',
+      if (!asset.localUri) {
+        throw new Error(
+          'La imagen de prueba no pudo copiarse al almacenamiento temporal.',
+        );
+      }
+
+      selectImage(asset.localUri, 'image/jpeg');
+    } catch (error) {
+      Alert.alert(
+        'No se pudo cargar la boleta de prueba',
+        error instanceof Error ? error.message : 'Error desconocido',
       );
+    } finally {
+      setLoadingTestReceipt(false);
     }
-
-    console.log(
-      '[Cuánto Pago] Ruta local de boleta de prueba:',
-      asset.localUri,
-    );
-
-    selectImage(asset.localUri, 'image/jpeg');
-  } catch (error) {
-    console.error(
-      '[Cuánto Pago] Error cargando boleta de prueba:',
-      error,
-    );
-
-    Alert.alert(
-      'No se pudo cargar la boleta de prueba',
-      error instanceof Error ? error.message : 'Error desconocido',
-    );
-  } finally {
-    setLoadingTestReceipt(false);
-  }
-};
+  };
 
   const scan = async () => {
     if (!imageUri) return;
@@ -190,6 +200,20 @@ useEffect(() => {
     });
   };
 
+
+  const removePerson = (person: string) => {
+    setPeople((current) => current.filter((name) => name !== person));
+    setAssignments((current) =>
+      Object.fromEntries(
+        Object.entries(current).map(([itemId, names]) => [
+          itemId,
+          names.filter((name) => name !== person),
+        ]),
+      ),
+    );
+    if (payer === person) setPayer('');
+  };
+
   const totals = useMemo(() => {
     const base = Object.fromEntries(
       people.map((person) => [person, 0]),
@@ -237,6 +261,70 @@ ${people
   )
   .join('\n')}`;
 
+  const pasteTransferData = async () => {
+    try {
+      const text = await Clipboard.getStringAsync();
+      if (!text.trim()) {
+        Alert.alert('Portapapeles vacío', 'Copia primero los datos desde la aplicación de tu banco.');
+        return;
+      }
+
+      const parsed = parseTransferText(text);
+      const detectedCount = Object.values(parsed).filter(Boolean).length;
+      if (!detectedCount) {
+        Alert.alert('No pudimos reconocer los datos', 'Completa manualmente lo que falte.');
+        return;
+      }
+
+      setTransfer((current) => ({
+        bank: parsed.bank || current.bank,
+        accountType: parsed.accountType || current.accountType,
+        accountNumber: parsed.accountNumber || current.accountNumber,
+        rut: parsed.rut || current.rut,
+      }));
+      Alert.alert('Datos detectados', 'Revisa los campos antes de compartirlos.');
+    } catch (error) {
+      Alert.alert('No se pudo leer el portapapeles', error instanceof Error ? error.message : 'Error desconocido');
+    }
+  };
+
+  const openSaveAccount = () => {
+    if (!transfer.bank.trim() || !transfer.accountType.trim() || !transfer.accountNumber.trim() || !transfer.rut.trim()) {
+      Alert.alert('Faltan datos', 'Completa banco, tipo de cuenta, número y RUT antes de guardar.');
+      return;
+    }
+    setAccountLabel(savedAccounts.length ? `Cuenta ${savedAccounts.length + 1}` : 'Cuenta principal');
+    setSaveAccountModalVisible(true);
+  };
+
+  const confirmSaveAccount = async () => {
+    const label = accountLabel.trim();
+    if (!label) return;
+    try {
+      const updated = await saveTransferAccount({ label, transfer, isDefault: savedAccounts.length === 0 });
+      setSavedAccounts(updated);
+      setSaveAccountModalVisible(false);
+      setAccountLabel('');
+      Alert.alert('Cuenta guardada', 'Podrás reutilizarla en futuras cuentas.');
+    } catch (error) {
+      Alert.alert('No se pudo guardar', error instanceof Error ? error.message : 'Error desconocido');
+    }
+  };
+
+  const selectSavedAccount = (account: SavedTransferAccount) => {
+    setTransfer(account.transfer);
+    setAccountsModalVisible(false);
+  };
+
+  const removeSavedAccount = async (id: string) => {
+    try {
+      const updated = await deleteTransferAccount(id);
+      setSavedAccounts(updated);
+    } catch (error) {
+      Alert.alert('No se pudo eliminar', error instanceof Error ? error.message : 'Error desconocido');
+    }
+  };
+
   const reset = () => {
     setStep(0);
     setImageUri(null);
@@ -252,6 +340,7 @@ ${people
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
       >
@@ -410,19 +499,16 @@ ${people
               </Pressable>
             </View>
 
-            <View style={styles.chips}>
-              {people.map((person) => (
-                <Pressable
-                  key={person}
-                  style={styles.chip}
-                  onPress={() =>
-                    setPeople((current) =>
-                      current.filter((x) => x !== person),
-                    )
-                  }
-                >
-                  <Text style={styles.chipText}>{person} ×</Text>
-                </Pressable>
+            <View style={styles.peopleList}>
+              {people.map((person, index) => (
+                <View key={`${person}-${index}`} style={styles.personRow}>
+                  <PersonAvatar name={person} index={index} />
+                  <Text style={styles.personName}>{person}</Text>
+                  {payer === person && <Text style={styles.payerBadge}>Pagó</Text>}
+                  <Pressable onPress={() => removePerson(person)} hitSlop={10}>
+                    <Text style={styles.removePerson}>×</Text>
+                  </Pressable>
+                </View>
               ))}
             </View>
 
@@ -446,22 +532,18 @@ ${people
                 </View>
 
                 <View style={styles.chips}>
-                  {people.map((person) => {
-                    const selected = (
-                      assignments[item.id] || []
-                    ).includes(person);
+                  {people.map((person, index) => {
+                    const selected = (assignments[item.id] || []).includes(person);
 
                     return (
                       <Pressable
-                        key={person}
-                        style={[
-                          styles.personChip,
-                          selected && styles.personChipSelected,
-                        ]}
+                        key={`${person}-${index}`}
+                        style={[styles.personChip, selected && styles.personChipSelected]}
                         onPress={() =>
                           toggleAssignment(item.id, person)
                         }
                       >
+                        <PersonAvatar name={person} index={index} size={26} selected={selected} />
                         <Text
                           style={[
                             styles.personChipText,
@@ -470,6 +552,7 @@ ${people
                         >
                           {person}
                         </Text>
+                        {selected && <Text style={styles.personChipCheck}>✓</Text>}
                       </Pressable>
                     );
                   })}
@@ -493,15 +576,16 @@ ${people
             <Text style={styles.label}>¿Quién pagó?</Text>
 
             <View style={styles.chips}>
-              {people.map((person) => (
+              {people.map((person, index) => (
                 <Pressable
-                  key={person}
+                  key={`${person}-${index}`}
                   style={[
                     styles.personChip,
                     payer === person && styles.personChipSelected,
                   ]}
                   onPress={() => setPayer(person)}
                 >
+                  <PersonAvatar name={person} index={index} size={26} selected={payer === person} />
                   <Text
                     style={[
                       styles.personChipText,
@@ -533,54 +617,30 @@ ${people
             </View>
 
             {includeTransfer && (
-<View style={styles.transferBox}>
-  <TextInput
-    style={styles.input}
-    placeholder="Banco — Ej: BancoEstado"
-    placeholderTextColor="#92929A"
-    value={transfer.bank}
-    onChangeText={(bank) =>
-      setTransfer((current) => ({ ...current, bank }))
-    }
-  />
-
-  <TextInput
-    style={styles.input}
-    placeholder="Tipo de cuenta — Ej: Cuenta RUT"
-    placeholderTextColor="#92929A"
-    value={transfer.accountType}
-    onChangeText={(accountType) =>
-      setTransfer((current) => ({ ...current, accountType }))
-    }
-  />
-
-  <TextInput
-    style={styles.input}
-    placeholder="Número de cuenta — Ej: 12345678"
-    placeholderTextColor="#92929A"
-    keyboardType="number-pad"
-    value={transfer.accountNumber}
-    onChangeText={(accountNumber) =>
-      setTransfer((current) => ({ ...current, accountNumber }))
-    }
-  />
-
-  <TextInput
-    style={styles.input}
-    placeholder="RUT — Ej: 12.345.678-9"
-    placeholderTextColor="#92929A"
-    autoCapitalize="characters"
-    value={transfer.rut}
-    onChangeText={(rut) =>
-      setTransfer((current) => ({ ...current, rut }))
-    }
-  />
-</View>
-                   )}
+              <>
+                <View style={styles.transferActions}>
+                  <View style={styles.flex}>
+                    <SecondaryButton label="📋 Pegar desde banco" onPress={pasteTransferData} />
+                  </View>
+                  <View style={styles.flex}>
+                    <SecondaryButton label="🏦 Mis cuentas" onPress={() => setAccountsModalVisible(true)} />
+                  </View>
+                </View>
+                <View style={styles.transferBox}>
+                  <TextInput style={styles.input} placeholder="Banco — Ej: BancoEstado" placeholderTextColor="#92929A" value={transfer.bank} onChangeText={(bank) => setTransfer((x) => ({ ...x, bank }))} />
+                  <TextInput style={styles.input} placeholder="Tipo de cuenta — Ej: Cuenta RUT" placeholderTextColor="#92929A" value={transfer.accountType} onChangeText={(accountType) => setTransfer((x) => ({ ...x, accountType }))} />
+                  <TextInput style={styles.input} placeholder="Número de cuenta — Ej: 12345678" placeholderTextColor="#92929A" keyboardType="number-pad" value={transfer.accountNumber} onChangeText={(accountNumber) => setTransfer((x) => ({ ...x, accountNumber }))} />
+                  <TextInput style={styles.input} placeholder="RUT — Ej: 12.345.678-9" placeholderTextColor="#92929A" autoCapitalize="characters" value={transfer.rut} onChangeText={(rut) => setTransfer((x) => ({ ...x, rut }))} />
+                  <SecondaryButton label="Guardar en Mis cuentas" onPress={openSaveAccount} />
+                  <Text style={styles.localDataHint}>🔒 Se guarda solo en este dispositivo.</Text>
+                </View>
+              </>
+            )}
 
             <View style={styles.summaryBox}>
-              {people.map((person) => (
-                <View key={person} style={styles.spaceBetween}>
+              {people.map((person, index) => (
+                <View key={`${person}-${index}`} style={styles.summaryRow}>
+                  <PersonAvatar name={person} index={index} size={34} />
                   <Text style={styles.summaryPerson}>
                     {person}
                     {person === payer ? ' (pagó)' : ''}
@@ -644,7 +704,62 @@ ${people
           </Card>
         )}
       </ScrollView>
+
+      <Modal visible={accountsModalVisible} transparent animationType="slide" onRequestClose={() => setAccountsModalVisible(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.spaceBetween}>
+              <Text style={styles.modalTitle}>Mis cuentas</Text>
+              <Pressable onPress={() => setAccountsModalVisible(false)} hitSlop={10}><Text style={styles.modalClose}>×</Text></Pressable>
+            </View>
+            {!savedAccounts.length ? (
+              <Text style={styles.muted}>Aún no tienes cuentas guardadas. Completa los datos y pulsa “Guardar en Mis cuentas”.</Text>
+            ) : savedAccounts.map((account) => (
+              <View key={account.id} style={styles.savedAccount}>
+                <Pressable style={styles.savedAccountMain} onPress={() => selectSavedAccount(account)}>
+                  <View style={styles.bankAvatar}><Text style={styles.bankAvatarText}>{account.label.charAt(0).toUpperCase()}</Text></View>
+                  <View style={styles.flex}>
+                    <Text style={styles.savedAccountLabel}>{account.label}</Text>
+                    <Text style={styles.savedAccountDetail}>{account.transfer.bank} · {account.transfer.accountType}</Text>
+                    <Text style={styles.savedAccountDetail}>••••{account.transfer.accountNumber.slice(-4)}</Text>
+                  </View>
+                  {account.isDefault && <Text style={styles.defaultBadge}>Principal</Text>}
+                </Pressable>
+                <Pressable onPress={() => Alert.alert('Eliminar cuenta', `¿Eliminar “${account.label}”?`, [{ text: 'Cancelar', style: 'cancel' }, { text: 'Eliminar', style: 'destructive', onPress: () => removeSavedAccount(account.id) }])}>
+                  <Text style={styles.deleteAccount}>Eliminar</Text>
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={saveAccountModalVisible} transparent animationType="fade" onRequestClose={() => setSaveAccountModalVisible(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Guardar cuenta</Text>
+            <Text style={styles.muted}>Ponle un nombre fácil de reconocer.</Text>
+            <TextInput style={styles.input} placeholder="Ej: Cuenta personal" value={accountLabel} onChangeText={setAccountLabel} autoFocus />
+            <View style={styles.row}>
+              <View style={styles.flex}><SecondaryButton label="Cancelar" onPress={() => setSaveAccountModalVisible(false)} /></View>
+              <View style={styles.flex}><PrimaryButton label="Guardar" onPress={confirmSaveAccount} disabled={!accountLabel.trim()} /></View>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
+  );
+}
+
+function PersonAvatar({ name, index, size = 36, selected = false }: { name: string; index: number; size?: number; selected?: boolean }) {
+  const colors = ['#0F766E', '#2563EB', '#7C3AED', '#DB2777', '#D97706', '#0891B2', '#4F46E5', '#059669'];
+  const color = colors[index % colors.length];
+  const initial = name.trim().charAt(0).toUpperCase() || '?';
+
+  return (
+    <View style={[styles.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: selected ? '#FFFFFF' : color }]}>
+      <Text style={[styles.avatarText, { fontSize: Math.max(12, size * 0.42), color: selected ? '#0D1B2A' : '#FFFFFF' }]}>{initial}</Text>
+    </View>
   );
 }
 
@@ -749,6 +864,13 @@ const styles = StyleSheet.create({
   },
   addButtonText: { color: 'white', fontWeight: '800' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  peopleList: { gap: 8 },
+  personRow: { flexDirection: 'row', alignItems: 'center', minHeight: 54, gap: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#ECEBF0' },
+  personName: { flex: 1, fontSize: 16, fontWeight: '800' },
+  payerBadge: { color: '#087F5B', backgroundColor: '#DDF7EE', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, fontWeight: '800', fontSize: 12 },
+  removePerson: { fontSize: 26, color: '#A1443E' },
+  avatar: { alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontWeight: '900' },
   chip: {
     backgroundColor: '#EEEDE9',
     borderRadius: 999,
@@ -771,6 +893,10 @@ const styles = StyleSheet.create({
   itemName: { fontSize: 17, fontWeight: '800', flex: 1 },
   itemPrice: { fontSize: 16, fontWeight: '800' },
   personChip: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: '#D5D4D9',
@@ -783,19 +909,35 @@ const styles = StyleSheet.create({
   },
   personChipText: { color: '#414149', fontWeight: '700' },
   personChipTextSelected: { color: '#FFFFFF' },
+  personChipCheck: { color: '#64E8CD', fontWeight: '900' },
   label: { fontSize: 15, color: '#4F4F57', fontWeight: '800' },
+  transferActions: { flexDirection: 'row', gap: 10 },
   transferBox: {
     gap: 10,
     backgroundColor: '#F5F4F1',
     padding: 12,
     borderRadius: 16,
   },
+  localDataHint: { textAlign: 'center', color: '#6D6D75', fontSize: 12, fontWeight: '700' },
   summaryBox: {
     gap: 12,
     padding: 14,
     borderRadius: 16,
     backgroundColor: '#FFF1ED',
   },
-  summaryPerson: { fontSize: 16, fontWeight: '700' },
+  summaryRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  summaryPerson: { fontSize: 16, fontWeight: '700', flex: 1 },
   summaryAmount: { fontSize: 17, fontWeight: '900' },
+  modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(13,27,42,0.45)' },
+  modalCard: { gap: 14, backgroundColor: '#FFFFFF', padding: 20, paddingBottom: 34, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '80%' },
+  modalTitle: { fontSize: 22, fontWeight: '900', color: '#17202A' },
+  modalClose: { fontSize: 30, color: '#59636E' },
+  savedAccount: { borderWidth: 1, borderColor: '#E1E5E8', borderRadius: 16, padding: 12, gap: 8 },
+  savedAccountMain: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  bankAvatar: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#0D1B2A', alignItems: 'center', justifyContent: 'center' },
+  bankAvatarText: { color: '#FFFFFF', fontSize: 18, fontWeight: '900' },
+  savedAccountLabel: { fontSize: 16, fontWeight: '900', color: '#17202A' },
+  savedAccountDetail: { fontSize: 13, color: '#6D6D75', marginTop: 2 },
+  defaultBadge: { color: '#087F5B', backgroundColor: '#DDF7EE', borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5, fontWeight: '800', fontSize: 11 },
+  deleteAccount: { textAlign: 'right', color: '#A1443E', fontWeight: '800' },
 });
