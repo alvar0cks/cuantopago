@@ -4,6 +4,31 @@ import type { ReceiptAnalysis } from '../types';
 
 const API_URL = (process.env.EXPO_PUBLIC_API_URL || '').replace(/\/$/, '');
 
+async function parseResponse(
+  status: number,
+  raw: string,
+): Promise<ReceiptAnalysis> {
+  let data: Record<string, unknown>;
+
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    throw new Error(
+      `El backend respondió con un formato inválido (${status}).`,
+    );
+  }
+
+  if (status < 200 || status >= 300) {
+    throw new Error(
+      typeof data.error === 'string'
+        ? data.error
+        : `No fue posible analizar la boleta (${status}).`,
+    );
+  }
+
+  return data as unknown as ReceiptAnalysis;
+}
+
 async function analyzeNativeReceipt(
   imageUri: string,
   mimeType: string,
@@ -19,25 +44,7 @@ async function analyzeNativeReceipt(
     },
   );
 
-  let data: Record<string, unknown>;
-
-  try {
-    data = result.body ? JSON.parse(result.body) : {};
-  } catch {
-    throw new Error(
-      `El backend respondió con un formato inválido (${result.status}).`,
-    );
-  }
-
-  if (result.status < 200 || result.status >= 300) {
-    throw new Error(
-      typeof data.error === 'string'
-        ? data.error
-        : `No fue posible analizar la boleta (${result.status}).`,
-    );
-  }
-
-  return data as unknown as ReceiptAnalysis;
+  return parseResponse(result.status, result.body);
 }
 
 async function analyzeWebReceipt(
@@ -63,27 +70,7 @@ async function analyzeWebReceipt(
     body: form,
   });
 
-  const text = await response.text();
-
-  let data: Record<string, unknown>;
-
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error(
-      `El backend respondió con un formato inválido (${response.status}).`,
-    );
-  }
-
-  if (!response.ok) {
-    throw new Error(
-      typeof data.error === 'string'
-        ? data.error
-        : `No fue posible analizar la boleta (${response.status}).`,
-    );
-  }
-
-  return data as unknown as ReceiptAnalysis;
+  return parseResponse(response.status, await response.text());
 }
 
 export async function analyzeReceipt(
@@ -96,13 +83,7 @@ export async function analyzeReceipt(
     );
   }
 
-  console.log('[Cuánto Pago] Enviando boleta a:', API_URL);
-  console.log('[Cuánto Pago] Plataforma:', Platform.OS);
-  console.log('[Cuánto Pago] URI:', imageUri);
-
-  if (Platform.OS === 'web') {
-    return analyzeWebReceipt(imageUri, mimeType);
-  }
-
-  return analyzeNativeReceipt(imageUri, mimeType);
+  return Platform.OS === 'web'
+    ? analyzeWebReceipt(imageUri, mimeType)
+    : analyzeNativeReceipt(imageUri, mimeType);
 }
