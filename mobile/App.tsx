@@ -50,6 +50,35 @@ const EMPTY_TRANSFER: TransferData = {
   rut: '',
 };
 
+type TipMode = 'proportional' | 'equal';
+
+function reconcileRoundedTotals(
+  rawTotals: Record<string, number>,
+  targetTotal: number,
+): Record<string, number> {
+  const entries = Object.entries(rawTotals);
+  if (!entries.length) return {};
+
+  const floored = Object.fromEntries(
+    entries.map(([person, value]) => [person, Math.max(0, Math.floor(value))]),
+  ) as Record<string, number>;
+
+  let remaining = Math.max(0, Math.round(targetTotal)) - Object.values(floored).reduce((sum, value) => sum + value, 0);
+
+  const byRemainder = entries
+    .map(([person, value]) => ({ person, remainder: value - Math.floor(value) }))
+    .sort((a, b) => b.remainder - a.remainder);
+
+  let index = 0;
+  while (remaining > 0 && byRemainder.length) {
+    floored[byRemainder[index % byRemainder.length].person] += 1;
+    remaining -= 1;
+    index += 1;
+  }
+
+  return floored;
+}
+
 export default function App() {
   return (
     <SafeAreaProvider>
@@ -64,6 +93,7 @@ export default function App() {
 function Main() {
   const scrollRef = useRef<ScrollView>(null);
 
+  const [isHome, setIsHome] = useState(true);
   const [step, setStep] = useState(0);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageMime, setImageMime] = useState('image/jpeg');
@@ -76,6 +106,9 @@ function Main() {
   const [assignments, setAssignments] = useState<Record<string, string[]>>({});
   const [payer, setPayer] = useState('');
   const [tipPercent, setTipPercent] = useState('10');
+  const [tipMode, setTipMode] = useState<TipMode>('proportional');
+  const [detectedTipAmount, setDetectedTipAmount] = useState<number | null>(null);
+  const [useDetectedTip, setUseDetectedTip] = useState(false);
   const [includeTransfer, setIncludeTransfer] = useState(true);
   const [transfer, setTransfer] = useState<TransferData>(EMPTY_TRANSFER);
 
@@ -171,6 +204,27 @@ function Main() {
       const result = await analyzeReceipt(imageUri, imageMime);
       setItems(result.items || []);
       setAssignments({});
+
+      const scannedTip =
+        result.tip == null ? null : Math.max(0, Math.round(Number(result.tip) || 0));
+      setDetectedTipAmount(scannedTip);
+      setUseDetectedTip(scannedTip != null);
+
+      if (scannedTip != null) {
+        const scannedBase = (result.items || []).reduce(
+          (sum, item) => sum + Number(item.price || 0),
+          0,
+        );
+        if (scannedBase > 0) {
+          const detectedPercent = (scannedTip / scannedBase) * 100;
+          setTipPercent(
+            Math.abs(detectedPercent - Math.round(detectedPercent)) < 0.05
+              ? String(Math.round(detectedPercent))
+              : detectedPercent.toFixed(2),
+          );
+        }
+      }
+
       setStep(1);
     } catch (error) {
       Alert.alert(
@@ -293,24 +347,56 @@ function Main() {
     }
 
     const tip = Math.max(0, Number(tipPercent) || 0);
-    const multiplier = 1 + tip / 100;
+    const baseTotal = Object.values(adjusted).reduce(
+      (sum, value) => sum + value,
+      0,
+    );
+
+    const calculatedTipAmount = Math.max(0, Math.round(baseTotal * tip / 100));
+    const tipAmount =
+      useDetectedTip && detectedTipAmount != null
+        ? detectedTipAmount
+        : calculatedTipAmount;
+
+    const payingPeople = people.filter((person) => !invitedSet.has(person));
+    const rawTotals = Object.fromEntries(
+      people.map((person) => {
+        const base = adjusted[person] || 0;
+        let personTip = 0;
+
+        if (tipMode === 'equal') {
+          if (payingPeople.includes(person) && payingPeople.length > 0) {
+            personTip = tipAmount / payingPeople.length;
+          }
+        } else if (baseTotal > 0) {
+          personTip = tipAmount * (base / baseTotal);
+        }
+
+        return [person, base + personTip];
+      }),
+    ) as Record<string, number>;
+
+    const targetTotal = Math.round(baseTotal + tipAmount);
+    const totals = reconcileRoundedTotals(rawTotals, targetTotal);
 
     return {
-      totals: Object.fromEntries(
-        Object.entries(adjusted).map(([person, value]) => [
-          person,
-          value * multiplier,
-        ]),
-      ) as Record<string, number>,
-      invitationShare: Object.fromEntries(
-        Object.entries(invitationShare).map(([person, value]) => [
-          person,
-          value * multiplier,
-        ]),
-      ) as Record<string, number>,
+      totals,
+      invitationShare,
       ownConsumption,
+      baseTotal,
+      tipAmount,
+      targetTotal,
     };
-  }, [assignments, invitedPeople, items, people, tipPercent]);
+  }, [
+    assignments,
+    detectedTipAmount,
+    invitedPeople,
+    items,
+    people,
+    tipMode,
+    tipPercent,
+    useDetectedTip,
+  ]);
 
   const totals = billBreakdown.totals;
 
@@ -331,7 +417,7 @@ N° de cuenta: ${transfer.accountNumber}`;
 
   const groupMessage = `¡Hola! 🧾 Resumen de la cuenta (incluye ${
     Number(tipPercent) || 0
-  }% de propina):
+  }% de propina · ${tipMode === 'equal' ? 'partes iguales' : 'proporcional'} · ${formatClp(billBreakdown.tipAmount)}):
 
 ${people
   .map((person) =>
@@ -431,7 +517,107 @@ ${people
     setInvitedPeople([]);
     setAssignments({});
     setPayer('');
+    setTipPercent('10');
+    setTipMode('proportional');
+    setDetectedTipAmount(null);
+    setUseDetectedTip(false);
   };
+
+  if (isHome) {
+    return (
+      <View style={styles.homeScreen}>
+        <ScrollView
+          contentContainerStyle={styles.homeContainer}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.homeHeader}>
+            <View style={styles.homeBrandWrap}>
+              <View style={styles.homeLogoMark}>
+                <Text style={styles.logoMarkText}>⌣</Text>
+              </View>
+              <Text style={styles.homeBrand}>Cuánto Pago</Text>
+            </View>
+            <View style={styles.homeProfileButton}>
+              <Text style={styles.homeProfileIcon}>♙</Text>
+            </View>
+          </View>
+
+          <View style={styles.homeHero}>
+            <Text style={styles.homeHeroTitle}>La forma más fácil</Text>
+            <Text style={styles.homeHeroAccent}>de dividir cuentas</Text>
+            <Text style={styles.homeHeroText}>
+              Escanea una boleta, asigna lo que consumió cada persona y descubre cuánto debe pagar cada uno en segundos.
+            </Text>
+          </View>
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.homeScanCard,
+              pressed && styles.homePressed,
+            ]}
+            onPress={() => {
+              setStep(0);
+              setIsHome(false);
+            }}
+          >
+            <View style={styles.homeReceiptVisual}>
+              <View style={styles.homeScanCorners}>
+                <Text style={styles.homeReceiptEmoji}>🧾</Text>
+              </View>
+            </View>
+            <View style={styles.homeScanCopy}>
+              <Text style={styles.homeScanTitle}>Escanear boleta</Text>
+              <Text style={styles.homeScanSubtitle}>Comienza en segundos</Text>
+            </View>
+            <View style={styles.homeArrowButton}>
+              <Text style={styles.homeArrow}>→</Text>
+            </View>
+          </Pressable>
+
+          <View style={styles.homeInfoCard}>
+            <View style={styles.homeShield}>
+              <Text style={styles.homeShieldIcon}>✓</Text>
+            </View>
+            <View style={styles.flex}>
+              <Text style={styles.homeInfoTitle}>Sin registro</Text>
+              <Text style={styles.homeInfoText}>
+                Empieza a dividir la cuenta sin crear una cuenta.
+              </Text>
+            </View>
+            <Text style={styles.homeInfoArrow}>›</Text>
+          </View>
+        </ScrollView>
+
+        <View style={styles.homeBottomNav}>
+          <Pressable style={styles.homeNavItem}>
+            <Text style={[styles.homeNavIcon, styles.homeNavActive]}>⌂</Text>
+            <Text style={[styles.homeNavText, styles.homeNavActive]}>Inicio</Text>
+          </Pressable>
+          <Pressable
+            style={styles.homeNavItem}
+            onPress={() => Alert.alert('Próximamente', 'El historial estará disponible en una próxima versión.')}
+          >
+            <Text style={styles.homeNavIcon}>◷</Text>
+            <Text style={styles.homeNavText}>Historial</Text>
+          </Pressable>
+          <Pressable
+            style={styles.homeNavItem}
+            onPress={() => Alert.alert('Próximamente', 'Los grupos estarán disponibles en una próxima versión.')}
+          >
+            <Text style={styles.homeNavIcon}>♧</Text>
+            <Text style={styles.homeNavText}>Grupos</Text>
+          </Pressable>
+          <Pressable
+            style={styles.homeNavItem}
+            onPress={() => Alert.alert('Próximamente', 'Los ajustes estarán disponibles en una próxima versión.')}
+          >
+            <Text style={styles.homeNavIcon}>⚙</Text>
+            <Text style={styles.homeNavText}>Ajustes</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <KeyboardAvoidingView
@@ -445,7 +631,7 @@ ${people
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <View style={styles.brandWrap}>
+          <Pressable style={styles.brandWrap} onPress={() => setIsHome(true)}>
             <View style={styles.logoMark}>
               <Text style={styles.logoMarkText}>⌣</Text>
             </View>
@@ -453,7 +639,7 @@ ${people
               <Text style={styles.brand}>Cuánto Pago</Text>
               <Text style={styles.subtitle}>Divide sin complicaciones</Text>
             </View>
-          </View>
+          </Pressable>
           <View style={styles.stepPill}>
             <Text style={styles.stepPillText}>{step + 1}/5</Text>
           </View>
@@ -500,15 +686,6 @@ ${people
 
         {step === 0 && (
           <>
-            <View style={styles.hero}>
-              <View style={styles.heroBadge}><Text style={styles.heroEyebrow}>LA FORMA MÁS FÁCIL DE DIVIDIR CUENTAS</Text></View>
-              <Text style={styles.heroTitle}>Divide la cuenta</Text>
-              <Text style={styles.heroTitleAccent}>sin complicaciones</Text>
-              <Text style={styles.heroText}>
-                Escanea la boleta, asigna lo que consumió cada persona y descubre cuánto debe pagar cada uno en segundos.
-              </Text>
-            </View>
-
             <Card>
               <View style={styles.receiptFrame}>
                 {imageUri ? (
@@ -878,10 +1055,91 @@ ${people
               <Text style={styles.label}>Propina (%)</Text>
               <TextInput
                 style={styles.input}
-                keyboardType="number-pad"
+                keyboardType="decimal-pad"
                 value={tipPercent}
-                onChangeText={setTipPercent}
+                onChangeText={(value) => {
+                  setTipPercent(value);
+                  setUseDetectedTip(false);
+                }}
               />
+
+              {detectedTipAmount != null && (
+                <Pressable
+                  style={styles.detectedTipRow}
+                  onPress={() => setUseDetectedTip((current) => !current)}
+                >
+                  <View style={styles.flex}>
+                    <Text style={styles.detectedTipTitle}>
+                      Propina detectada en la boleta: {formatClp(detectedTipAmount)}
+                    </Text>
+                    <Text style={styles.detectedTipHint}>
+                      {useDetectedTip
+                        ? 'Se usará el monto exacto impreso en la boleta.'
+                        : 'Toca aquí para volver a usar el monto exacto de la boleta.'}
+                    </Text>
+                  </View>
+                  <Text style={styles.detectedTipCheck}>
+                    {useDetectedTip ? '✓' : '○'}
+                  </Text>
+                </Pressable>
+              )}
+
+              <Text style={styles.label}>¿Cómo dividir la propina?</Text>
+              <View style={styles.tipModeRow}>
+                <Pressable
+                  style={[
+                    styles.tipModeOption,
+                    tipMode === 'proportional' && styles.tipModeOptionSelected,
+                  ]}
+                  onPress={() => setTipMode('proportional')}
+                >
+                  <Text
+                    style={[
+                      styles.tipModeTitle,
+                      tipMode === 'proportional' && styles.tipModeTextSelected,
+                    ]}
+                  >
+                    Proporcional
+                  </Text>
+                  <Text
+                    style={[
+                      styles.tipModeSubtitle,
+                      tipMode === 'proportional' && styles.tipModeTextSelected,
+                    ]}
+                  >
+                    Cada uno paga según lo que consumió
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  style={[
+                    styles.tipModeOption,
+                    tipMode === 'equal' && styles.tipModeOptionSelected,
+                  ]}
+                  onPress={() => setTipMode('equal')}
+                >
+                  <Text
+                    style={[
+                      styles.tipModeTitle,
+                      tipMode === 'equal' && styles.tipModeTextSelected,
+                    ]}
+                  >
+                    Partes iguales
+                  </Text>
+                  <Text
+                    style={[
+                      styles.tipModeSubtitle,
+                      tipMode === 'equal' && styles.tipModeTextSelected,
+                    ]}
+                  >
+                    La propina se divide entre todos
+                  </Text>
+                </Pressable>
+              </View>
+
+              <Text style={styles.tipSummary}>
+                Propina aplicada: {formatClp(billBreakdown.tipAmount)} · Total final: {formatClp(billBreakdown.targetTotal)}
+              </Text>
 
               <View style={styles.spaceBetween}>
                 <Text style={styles.label}>
@@ -992,12 +1250,7 @@ ${people
                   Total de la cuenta
                 </Text>
                 <Text style={styles.summaryTotalAmount}>
-                  {formatClp(
-                    Object.values(totals).reduce(
-                      (sum, value) => sum + value,
-                      0,
-                    ),
-                  )}
+                  {formatClp(billBreakdown.targetTotal)}
                 </Text>
                 <Text style={styles.summaryPayer}>
                   Pagó: {payer || 'Selecciona una persona'}
@@ -1093,7 +1346,7 @@ ${people
                         totals[person] || 0,
                       )} (incluye ${
                         Number(tipPercent) || 0
-                      }% de propina).${
+                      }% de propina, ${tipMode === 'equal' ? 'dividida en partes iguales' : 'proporcional al consumo'}).${
                         includeTransfer
                           ? `\n\n${transferMessage}`
                           : ''
@@ -1344,6 +1597,228 @@ function NavButtons({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#FBFAFF' },
   flex: { flex: 1 },
+  homeScreen: {
+    flex: 1,
+    backgroundColor: '#FBFAFF',
+  },
+  homeContainer: {
+    paddingHorizontal: 22,
+    paddingTop: 16,
+    paddingBottom: 130,
+    maxWidth: 720,
+    width: '100%',
+    alignSelf: 'center',
+  },
+  homeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 52,
+  },
+  homeBrandWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  homeLogoMark: {
+    width: 58,
+    height: 58,
+    borderRadius: 18,
+    backgroundColor: '#6C45E8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#6C45E8',
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
+  },
+  homeBrand: {
+    color: '#12183F',
+    fontSize: 26,
+    fontWeight: '900',
+  },
+  homeProfileButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#F1ECFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  homeProfileIcon: {
+    color: '#6C45E8',
+    fontSize: 27,
+    fontWeight: '700',
+  },
+  homeHero: {
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    marginBottom: 36,
+  },
+  homeHeroTitle: {
+    color: '#12183F',
+    fontSize: 38,
+    lineHeight: 44,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  homeHeroAccent: {
+    color: '#6C45E8',
+    fontSize: 38,
+    lineHeight: 44,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  homeHeroText: {
+    marginTop: 18,
+    color: '#73778B',
+    fontSize: 17,
+    lineHeight: 26,
+    textAlign: 'center',
+    maxWidth: 510,
+  },
+  homeScanCard: {
+    minHeight: 190,
+    borderRadius: 28,
+    backgroundColor: '#6C45E8',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 24,
+    shadowColor: '#6C45E8',
+    shadowOpacity: 0.22,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 6,
+    marginBottom: 34,
+  },
+  homePressed: {
+    opacity: 0.92,
+    transform: [{ scale: 0.995 }],
+  },
+  homeReceiptVisual: {
+    width: 96,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  homeScanCorners: {
+    width: 82,
+    height: 100,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.75)',
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  homeReceiptEmoji: {
+    fontSize: 54,
+  },
+  homeScanCopy: {
+    flex: 1,
+    paddingHorizontal: 16,
+  },
+  homeScanTitle: {
+    color: '#FFFFFF',
+    fontSize: 25,
+    fontWeight: '900',
+  },
+  homeScanSubtitle: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 15,
+    marginTop: 7,
+  },
+  homeArrowButton: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  homeArrow: {
+    color: '#6C45E8',
+    fontSize: 34,
+    lineHeight: 36,
+    fontWeight: '500',
+  },
+  homeInfoCard: {
+    minHeight: 112,
+    borderRadius: 24,
+    backgroundColor: '#F4F0FF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 22,
+    gap: 16,
+  },
+  homeShield: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: '#6C45E8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  homeShieldIcon: {
+    color: '#6C45E8',
+    fontSize: 23,
+    fontWeight: '900',
+  },
+  homeInfoTitle: {
+    color: '#12183F',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  homeInfoText: {
+    color: '#73778B',
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 4,
+  },
+  homeInfoArrow: {
+    color: '#6C45E8',
+    fontSize: 34,
+    fontWeight: '400',
+  },
+  homeBottomNav: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    bottom: 8,
+    minHeight: 88,
+    borderRadius: 28,
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingHorizontal: 8,
+    paddingBottom: 6,
+    shadowColor: '#1A1740',
+    shadowOpacity: 0.08,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: -4 },
+    elevation: 10,
+  },
+  homeNavItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+  },
+  homeNavIcon: {
+    color: '#777B91',
+    fontSize: 25,
+    fontWeight: '700',
+  },
+  homeNavText: {
+    color: '#777B91',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  homeNavActive: {
+    color: '#6C45E8',
+  },
   container: {
     padding: 18,
     paddingBottom: 48,
@@ -1802,6 +2277,71 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#565B72',
     fontWeight: '900',
+  },
+  detectedTipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: '#F5F0FF',
+    borderWidth: 1,
+    borderColor: '#DDD2FF',
+  },
+  detectedTipTitle: {
+    color: '#28204E',
+    fontWeight: '900',
+    fontSize: 13,
+  },
+  detectedTipHint: {
+    color: '#777B8E',
+    fontSize: 12,
+    marginTop: 3,
+    lineHeight: 17,
+  },
+  detectedTipCheck: {
+    color: '#6C45E8',
+    fontWeight: '900',
+    fontSize: 22,
+  },
+  tipModeRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  tipModeOption: {
+    flex: 1,
+    minHeight: 92,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#DED7EB',
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    justifyContent: 'center',
+  },
+  tipModeOptionSelected: {
+    backgroundColor: '#6C45E8',
+    borderColor: '#6C45E8',
+  },
+  tipModeTitle: {
+    color: '#171D46',
+    fontSize: 14,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+  tipModeSubtitle: {
+    color: '#777B8E',
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '700',
+  },
+  tipModeTextSelected: {
+    color: '#FFFFFF',
+  },
+  tipSummary: {
+    color: '#6C45E8',
+    fontWeight: '900',
+    fontSize: 12,
+    textAlign: 'center',
   },
   transferActions: {
     flexDirection: 'row',
