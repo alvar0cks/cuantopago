@@ -1,5 +1,4 @@
 import { Platform } from 'react-native';
-import * as FileSystem from 'expo-file-system/legacy';
 import type { ReceiptAnalysis } from '../types';
 
 const API_URL = (process.env.EXPO_PUBLIC_API_URL || '').replace(/\/$/, '');
@@ -33,18 +32,26 @@ async function analyzeNativeReceipt(
   imageUri: string,
   mimeType: string,
 ): Promise<ReceiptAnalysis> {
-  const result = await FileSystem.uploadAsync(
-    `${API_URL}/api/receipts/analyze`,
-    imageUri,
+  const form = new FormData();
+
+  // React Native permite adjuntar archivos nativos mediante uri/name/type.
+  // Esto evita el fallo de FileSystem.uploadAsync en Android con assets
+  // empaquetados (por ejemplo la boleta de prueba).
+  form.append(
+    'image',
     {
-      httpMethod: 'POST',
-      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-      fieldName: 'image',
-      mimeType: mimeType || 'image/jpeg',
-    },
+      uri: imageUri,
+      name: `boleta-${Date.now()}.jpg`,
+      type: mimeType || 'image/jpeg',
+    } as unknown as Blob,
   );
 
-  return parseResponse(result.status, result.body);
+  const response = await fetch(`${API_URL}/api/receipts/analyze`, {
+    method: 'POST',
+    body: form,
+  });
+
+  return parseResponse(response.status, await response.text());
 }
 
 async function analyzeWebReceipt(
