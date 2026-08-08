@@ -566,7 +566,7 @@ ${people
               </View>
             </View>
             <View style={styles.homeScanCopy}>
-              <Text style={styles.homeScanTitle}>Escanear boleta</Text>
+              <Text style={styles.homeScanTitle}>Escanear{`\n`}boleta</Text>
               <Text style={styles.homeScanSubtitle}>Comienza en segundos</Text>
             </View>
             <View style={styles.homeArrowButton}>
@@ -584,37 +584,9 @@ ${people
                 Empieza a dividir la cuenta sin crear una cuenta.
               </Text>
             </View>
-            <Text style={styles.homeInfoArrow}>›</Text>
           </View>
         </ScrollView>
 
-        <View style={styles.homeBottomNav}>
-          <Pressable style={styles.homeNavItem}>
-            <Text style={[styles.homeNavIcon, styles.homeNavActive]}>⌂</Text>
-            <Text style={[styles.homeNavText, styles.homeNavActive]}>Inicio</Text>
-          </Pressable>
-          <Pressable
-            style={styles.homeNavItem}
-            onPress={() => Alert.alert('Próximamente', 'El historial estará disponible en una próxima versión.')}
-          >
-            <Text style={styles.homeNavIcon}>◷</Text>
-            <Text style={styles.homeNavText}>Historial</Text>
-          </Pressable>
-          <Pressable
-            style={styles.homeNavItem}
-            onPress={() => Alert.alert('Próximamente', 'Los grupos estarán disponibles en una próxima versión.')}
-          >
-            <Text style={styles.homeNavIcon}>♧</Text>
-            <Text style={styles.homeNavText}>Grupos</Text>
-          </Pressable>
-          <Pressable
-            style={styles.homeNavItem}
-            onPress={() => Alert.alert('Próximamente', 'Los ajustes estarán disponibles en una próxima versión.')}
-          >
-            <Text style={styles.homeNavIcon}>⚙</Text>
-            <Text style={styles.homeNavText}>Ajustes</Text>
-          </Pressable>
-        </View>
       </View>
     );
   }
@@ -1604,7 +1576,7 @@ const styles = StyleSheet.create({
   homeContainer: {
     paddingHorizontal: 22,
     paddingTop: 16,
-    paddingBottom: 130,
+    paddingBottom: 36,
     maxWidth: 720,
     width: '100%',
     alignSelf: 'center',
@@ -1698,7 +1670,7 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.995 }],
   },
   homeReceiptVisual: {
-    width: 96,
+    width: 82,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1716,7 +1688,9 @@ const styles = StyleSheet.create({
   },
   homeScanCopy: {
     flex: 1,
-    paddingHorizontal: 16,
+    minWidth: 0,
+    paddingLeft: 14,
+    paddingRight: 8,
   },
   homeScanTitle: {
     color: '#FFFFFF',
@@ -1729,9 +1703,9 @@ const styles = StyleSheet.create({
     marginTop: 7,
   },
   homeArrowButton: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
