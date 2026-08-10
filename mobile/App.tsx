@@ -38,7 +38,7 @@ import { shareOnWhatsApp } from './src/utils/share';
 import { parseTransferText } from './src/utils/transferParser';
 
 const STEPS = ['Boleta', 'Productos', 'Personas', 'Reparto', 'Cobro'];
-const STEP_ICONS = ['🧾', '✓', '👥', '↗', '$'];
+const STEP_ICONS = ['', '✓', '👥', '↗', '$'];
 const TEST_RECEIPT_MODULE = require('./assets/test/boleta-irish-geopub.jpg');
 const TEST_RECEIPT_ENABLED =
   __DEV__ || process.env.EXPO_PUBLIC_ENABLE_TEST_RECEIPT === 'true';
@@ -429,7 +429,7 @@ Banco: ${transfer.bank}
 Tipo de cuenta: ${transfer.accountType}
 N° de cuenta: ${transfer.accountNumber}`;
 
-  const groupMessage = `¡Hola! 🧾 Resumen de la cuenta (incluye ${
+  const groupMessage = `¡Hola! Resumen de la cuenta (incluye ${
     Number(tipPercent) || 0
   }% de propina · ${tipMode === 'equal' ? 'partes iguales' : 'proporcional'} · ${formatClp(billBreakdown.tipAmount)}):
 
@@ -546,9 +546,7 @@ ${people
         >
           <View style={styles.homeHeader}>
             <View style={styles.homeBrandWrap}>
-              <View style={styles.homeLogoMark}>
-                <Text style={styles.logoMarkText}>⌣</Text>
-              </View>
+              <Image source={require('./assets/cuanto-pago-logo.png')} style={styles.homeLogoImage} />
               <Text style={styles.homeBrand}>Cuánto Pago</Text>
             </View>
             <View style={styles.homeProfileButton}>
@@ -564,6 +562,18 @@ ${people
             </Text>
           </View>
 
+          <View style={styles.homeInfoCard}>
+            <View style={styles.homeShield}>
+              <Text style={styles.homeShieldIcon}>✓</Text>
+            </View>
+            <View style={styles.flex}>
+              <Text style={styles.homeInfoTitle}>Sin registro</Text>
+              <Text style={styles.homeInfoText}>
+                Empieza a dividir la cuenta sin crear una cuenta.
+              </Text>
+            </View>
+          </View>
+
           <Pressable
             style={({ pressed }) => [
               styles.homeScanCard,
@@ -576,7 +586,7 @@ ${people
           >
             <View style={styles.homeReceiptVisual}>
               <View style={styles.homeScanCorners}>
-                <Text style={styles.homeReceiptEmoji}>🧾</Text>
+                <Image source={require('./assets/receipt-icon.png')} style={styles.homeReceiptIcon} />
               </View>
             </View>
             <View style={styles.homeScanCopy}>
@@ -587,18 +597,6 @@ ${people
               <Text style={styles.homeArrow}>→</Text>
             </View>
           </Pressable>
-
-          <View style={styles.homeInfoCard}>
-            <View style={styles.homeShield}>
-              <Text style={styles.homeShieldIcon}>✓</Text>
-            </View>
-            <View style={styles.flex}>
-              <Text style={styles.homeInfoTitle}>Sin registro</Text>
-              <Text style={styles.homeInfoText}>
-                Empieza a dividir la cuenta sin crear una cuenta.
-              </Text>
-            </View>
-          </View>
         </ScrollView>
 
       </View>
@@ -618,9 +616,7 @@ ${people
       >
         <View style={styles.header}>
           <Pressable style={styles.brandWrap} onPress={() => setIsHome(true)}>
-            <View style={styles.logoMark}>
-              <Text style={styles.logoMarkText}>⌣</Text>
-            </View>
+            <Image source={require('./assets/cuanto-pago-logo.png')} style={styles.logoImage} />
             <View>
               <Text style={styles.brand}>Cuánto Pago</Text>
               <Text style={styles.subtitle}>Divide sin complicaciones</Text>
@@ -648,14 +644,18 @@ ${people
                     done && styles.stepCircleDone,
                   ]}
                 >
-                  <Text
-                    style={[
-                      styles.stepCircleText,
-                      (active || done) && styles.stepCircleTextActive,
-                    ]}
-                  >
-                    {done ? '✓' : STEP_ICONS[index]}
-                  </Text>
+                  {index === 0 && !done ? (
+                    <Image source={require('./assets/receipt-icon.png')} style={styles.stepReceiptIcon} />
+                  ) : (
+                    <Text
+                      style={[
+                        styles.stepCircleText,
+                        (active || done) && styles.stepCircleTextActive,
+                      ]}
+                    >
+                      {done ? '✓' : STEP_ICONS[index]}
+                    </Text>
+                  )}
                 </View>
                 <Text
                   style={[
@@ -682,7 +682,7 @@ ${people
                 ) : (
                   <View style={styles.placeholder}>
                     <View style={styles.receiptIllustration}>
-                      <Text style={styles.receiptIllustrationIcon}>🧾</Text>
+                      <Image source={require('./assets/receipt-icon.png')} style={styles.receiptIllustrationIcon} />
                     </View>
                     <Text style={styles.placeholderTitle}>
                       Tu boleta aparecerá aquí
@@ -1610,6 +1610,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 14,
   },
+  homeLogoImage: {
+    width: 58,
+    height: 58,
+    borderRadius: 18,
+  },
   homeLogoMark: {
     width: 58,
     height: 58,
@@ -1681,7 +1686,7 @@ const styles = StyleSheet.create({
     shadowRadius: 22,
     shadowOffset: { width: 0, height: 12 },
     elevation: 6,
-    marginBottom: 34,
+    marginBottom: 24,
   },
   homePressed: {
     opacity: 0.92,
@@ -1701,8 +1706,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  homeReceiptEmoji: {
-    fontSize: 54,
+  homeReceiptIcon: {
+    width: 58,
+    height: 58,
+    resizeMode: 'contain',
   },
   homeScanCopy: {
     flex: 1,
@@ -1742,6 +1749,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 22,
     gap: 16,
+    marginBottom: 18,
   },
   homeShield: {
     width: 48,
@@ -1830,6 +1838,11 @@ const styles = StyleSheet.create({
     gap: 10,
     flex: 1,
   },
+  logoImage: {
+    width: 42,
+    height: 42,
+    borderRadius: 13,
+  },
   logoMark: {
     width: 42,
     height: 42,
@@ -1907,6 +1920,11 @@ const styles = StyleSheet.create({
   stepCircleTextActive: {
     color: '#FFFFFF',
   },
+  stepReceiptIcon: {
+    width: 24,
+    height: 24,
+    resizeMode: 'contain',
+  },
   stepName: {
     fontSize: 10,
     color: '#8A8DA1',
@@ -1982,7 +2000,9 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   receiptIllustrationIcon: {
-    fontSize: 48,
+    width: 58,
+    height: 58,
+    resizeMode: 'contain',
   },
   placeholderTitle: {
     color: '#161C44',

@@ -12,7 +12,8 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Cuánto Pago usa la cámara para fotografiar la boleta.",
         "NSPhotoLibraryUsageDescription": "Cuánto Pago usa tu galería para seleccionar una foto de la boleta."
-      }
+      },
+      "icon": "./assets/cuanto-pago-logo.png"
     },
     "android": {
       "package": "com.alvar0cks.cuantopago",
@@ -20,7 +21,12 @@
         "android.permission.CAMERA",
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.RECORD_AUDIO"
-      ]
+      ],
+      "icon": "./assets/cuanto-pago-logo.png",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/cuanto-pago-logo.png",
+        "backgroundColor": "#FFFFFF"
+      }
     },
     "plugins": [
       [
@@ -37,6 +43,7 @@
         "projectId": "7ae1e94b-7cae-490b-a8cf-ac8828539cb7"
       }
     },
-    "owner": "alvar0cks"
+    "owner": "alvar0cks",
+    "icon": "./assets/cuanto-pago-logo.png"
   }
 }
