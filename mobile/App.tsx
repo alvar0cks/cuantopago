@@ -98,6 +98,7 @@ function Main() {
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageMime, setImageMime] = useState('image/jpeg');
   const [loading, setLoading] = useState(false);
+  const [scanTakingLong, setScanTakingLong] = useState(false);
   const [loadingTestReceipt, setLoadingTestReceipt] = useState(false);
   const [items, setItems] = useState<ReceiptItem[]>([]);
   const [people, setPeople] = useState<string[]>([]);
@@ -135,6 +136,19 @@ function Main() {
       scrollRef.current?.scrollTo({ y: 0, animated: true });
     });
   }, [step]);
+
+  useEffect(() => {
+    if (!loading) {
+      setScanTakingLong(false);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setScanTakingLong(true);
+    }, 8000);
+
+    return () => clearTimeout(timeout);
+  }, [loading]);
 
   const selectImage = (uri: string, mimeType = 'image/jpeg') => {
     setImageUri(uri);
@@ -708,10 +722,14 @@ ${people
                 <View style={styles.loadingBox}>
                   <ActivityIndicator size="large" color="#6C45E8" />
                   <Text style={styles.loadingTitle}>
-                    Gemini está leyendo la boleta
+                    {scanTakingLong
+                      ? 'Está tomando un poco más de lo normal'
+                      : 'Gemini está leyendo la boleta'}
                   </Text>
                   <Text style={styles.loadingText}>
-                    Esto puede tardar unos segundos.
+                    {scanTakingLong
+                      ? 'Seguimos procesando tu boleta. No necesitas hacer nada.'
+                      : 'Esto puede tardar unos segundos.'}
                   </Text>
                 </View>
               ) : (
