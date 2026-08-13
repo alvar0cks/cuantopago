@@ -26,6 +26,7 @@ import {
   SecondaryButton,
 } from './src/components/Ui';
 import { analyzeReceipt } from './src/services/api';
+import { initializeAdMob, showInterstitialIfEligible } from './src/services/adMob';
 import {
   deleteTransferAccount,
   loadTransferAccounts,
@@ -117,6 +118,10 @@ function Main() {
   const [accountsModalVisible, setAccountsModalVisible] = useState(false);
   const [saveAccountModalVisible, setSaveAccountModalVisible] = useState(false);
   const [accountLabel, setAccountLabel] = useState('');
+
+  useEffect(() => {
+    void initializeAdMob();
+  }, []);
 
   useEffect(() => {
     loadTransferAccounts()
@@ -995,7 +1000,14 @@ ${people
 
             <NavButtons
               back={() => setStep(2)}
-              next={() => setStep(4)}
+              next={() => {
+                setStep(4);
+                // Punto natural: la cuenta ya fue repartida y pasamos a Cobro.
+                // El anuncio solo aparece si está precargado y respeta el límite.
+                setTimeout(() => {
+                  void showInterstitialIfEligible();
+                }, 250);
+              }}
               nextDisabled={items.some(
                 (item) => !(assignments[item.id] || []).length,
               )}
