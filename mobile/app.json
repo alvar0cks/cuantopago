@@ -8,15 +8,16 @@
     "scheme": "cuantopago",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.alvar0cks.cuantopago",
+      "bundleIdentifier": "com..cuantopago.app",
       "infoPlist": {
         "NSCameraUsageDescription": "Cuánto Pago usa la cámara para fotografiar la boleta.",
-        "NSPhotoLibraryUsageDescription": "Cuánto Pago usa tu galería para seleccionar una foto de la boleta."
+        "NSPhotoLibraryUsageDescription": "Cuánto Pago usa tu galería para seleccionar una foto de la boleta.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "icon": "./assets/cuanto-pago-logo.png"
     },
     "android": {
-      "package": "com.alvar0cks.cuantopago",
+      "package": "com..cuantopago.app",
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_MEDIA_IMAGES",
