@@ -25,7 +25,7 @@
       ],
       "icon": "./assets/cuanto-pago-logo.png",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/cuanto-pago-logo.png",
+        "foregroundImage": "./assets/cuanto-pago-adaptive.png",
         "backgroundColor": "#FFFFFF"
       }
     },
