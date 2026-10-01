@@ -43,6 +43,3 @@ En `.env`, configura `EXPO_PUBLIC_API_URL` con la URL del backend.
 7. Calcular la parte de cada persona con propina.
 8. Compartir el resumen o los cobros individuales por WhatsApp.
 
-## Seguridad
-
-Nunca coloques `GEMINI_API_KEY` dentro de `mobile/`. La aplicación envía la imagen al backend y el backend realiza la consulta a Gemini.
