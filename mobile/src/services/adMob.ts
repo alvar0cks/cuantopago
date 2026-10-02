@@ -1,14 +1,25 @@
+import { Platform } from 'react-native';
 import mobileAds, {
   AdEventType,
   InterstitialAd,
   TestIds,
 } from 'react-native-google-mobile-ads';
 
+export async function initializeAdMob(): Promise<void> {
+  console.log('desactivado');
+}
+export async function showInterstitialIfEligible(): Promise<boolean> {
+  return false;
+}
+/*
 // En desarrollo SIEMPRE usamos el ID oficial de prueba de Google.
 const INTERSTITIAL_UNIT_ID = __DEV__
   ? TestIds.INTERSTITIAL
-  : 'ca-app-pub-5707119033456291/5074011042';
-
+  : Platform.select({
+    ios: 'ca-app-pub-5707119033456291/9251443056',
+    android: 'ca-app-pub-5707119033456291/5074011042',
+    default: TestIds.INTERSTITIAL
+  });
 // Estrategia poco invasiva para Cuánto Pago.
 const MIN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutos
 const MAX_ADS_PER_SESSION = 3;
@@ -53,7 +64,7 @@ function attachListeners() {
   });
 }
 
-export async function initializeAdMob() {
+export async function initializeAdMob(){
   if (initialized) return;
 
   try {
@@ -71,6 +82,8 @@ export async function initializeAdMob() {
  * Muestra un anuncio solo si ya está cargado y se cumplen nuestros límites.
  * Si no hay anuncio disponible, devuelve false inmediatamente y la app sigue.
  */
+
+/*
 export async function showInterstitialIfEligible(): Promise<boolean> {
   if (!initialized) {
     void initializeAdMob();
@@ -102,4 +115,4 @@ export async function showInterstitialIfEligible(): Promise<boolean> {
     loadInterstitial();
     return false;
   }
-}
+}*/

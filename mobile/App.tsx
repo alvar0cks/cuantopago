@@ -35,7 +35,8 @@ import {
 } from './src/services/transferAccounts';
 import type { ReceiptItem, TransferData } from './src/types';
 import { formatClp } from './src/utils/money';
-import { shareOnWhatsApp } from './src/utils/share';
+import { shareImage, shareOnWhatsApp } from './src/utils/share';
+import { captureRef } from 'react-native-view-shot';
 import { parseTransferText } from './src/utils/transferParser';
 
 const STEPS = ['Boleta', 'Productos', 'Personas', 'Reparto', 'Cobro'];
@@ -93,6 +94,7 @@ export default function App() {
 
 function Main() {
   const scrollRef = useRef<ScrollView>(null);
+  const shareImageRef = useRef<View>(null);
 
   const [isHome, setIsHome] = useState(true);
   const [step, setStep] = useState(0);
@@ -118,6 +120,9 @@ function Main() {
   const [accountsModalVisible, setAccountsModalVisible] = useState(false);
   const [saveAccountModalVisible, setSaveAccountModalVisible] = useState(false);
   const [accountLabel, setAccountLabel] = useState('');
+  const [expandedPeople, setExpandedPeople] = useState<Record<string, boolean>>({});
+  const [sharePreviewVisible, setSharePreviewVisible] = useState(false);
+  const [sharingImage, setSharingImage] = useState(false);
 
   useEffect(() => {
     void initializeAdMob();
@@ -246,10 +251,24 @@ function Main() {
 
       setStep(1);
     } catch (error) {
-      Alert.alert(
-        'No se pudo leer la boleta',
-        error instanceof Error ? error.message : 'Error desconocido',
-      );
+      if (__DEV__){
+          console.error('Error al leer la boleta:', error);
+      }
+      
+
+      const code = error instanceof Error ? error.message : 'ANALYSIS_ERROR';
+      const message =
+        code === 'NETWORK_ERROR'
+          ? 'Se perdió la conexión mientras procesábamos la boleta. Revisa tu conexión e inténtalo nuevamente.'
+          : code === 'SERVICE_BUSY'
+            ? 'El servicio está un poco ocupado en este momento. Inténtalo nuevamente en unos segundos.'
+            : code === 'CONFIG_ERROR'
+              ? 'El servicio de lectura no está disponible en este momento. Inténtalo más tarde.'
+              : 'Tuvimos un problema al procesar la boleta. Inténtalo nuevamente.';
+
+      Alert.alert('No pudimos leer la boleta', message, [
+        { text: 'Entendido' },
+      ]);
     } finally {
       setLoading(false);
     }
@@ -448,6 +467,128 @@ ${people
   )
   .join('\n')}`;
 
+  const getPersonItemDetails = (person: string) => {
+    const rawLines = items.flatMap((item) => {
+      const consumers = assignments[item.id] || [];
+      if (!consumers.includes(person) || !consumers.length) return [];
+
+      return [{
+        name: item.name,
+        amount: Number(item.price || 0) / consumers.length,
+        sharedBy: consumers.length,
+      }];
+    });
+
+    // Ajusta el redondeo de las líneas para que el detalle de consumo
+    // cuadre exactamente con el consumo personal mostrado por la app.
+    const target = Math.round(billBreakdown.ownConsumption[person] || 0);
+    const rounded = rawLines.map((line) => ({
+      ...line,
+      roundedAmount: Math.floor(Math.max(0, line.amount)),
+      remainder: line.amount - Math.floor(line.amount),
+    }));
+
+    let remaining = target - rounded.reduce(
+      (sum, line) => sum + line.roundedAmount,
+      0,
+    );
+
+    const order = rounded
+      .map((line, index) => ({ index, remainder: line.remainder }))
+      .sort((a, b) => b.remainder - a.remainder);
+
+    let index = 0;
+    while (remaining > 0 && order.length) {
+      rounded[order[index % order.length].index].roundedAmount += 1;
+      remaining -= 1;
+      index += 1;
+    }
+
+    return rounded;
+  };
+
+  const buildPersonDetail = (person: string) => {
+    const itemDetails = getPersonItemDetails(person);
+    const ownConsumption = Math.round(billBreakdown.ownConsumption[person] || 0);
+    const invitation = Math.round(billBreakdown.invitationShare[person] || 0);
+    const total = Math.round(totals[person] || 0);
+    const isInvited = invitedPeople.includes(person);
+    const tipAmount = isInvited
+      ? 0
+      : Math.max(0, total - ownConsumption - invitation);
+
+    const itemLines = itemDetails.length
+      ? itemDetails
+          .map((line) => {
+            const shared = line.sharedBy > 1 ? ` (tu parte de ${line.sharedBy})` : '';
+            return `  • ${line.name}${shared}: ${formatClp(line.roundedAmount)}`;
+          })
+          .join('\n')
+      : '  • Sin productos asignados';
+
+    if (isInvited) {
+      return `🎁 ${person} — invitado por el grupo\n${itemLines}\n  Total a pagar: ${formatClp(0)}`;
+    }
+
+    const extras = [
+      invitation > 0 ? `  • Invitación del grupo: ${formatClp(invitation)}` : '',
+      tipAmount > 0 ? `  • Propina: ${formatClp(tipAmount)}` : '',
+    ].filter(Boolean).join('\n');
+
+    return `${person}${person === payer ? ' (pagó)' : ''}\n${itemLines}${extras ? `\n${extras}` : ''}\n  Total: ${formatClp(total)}`;
+  };
+
+  const detailedGroupMessage = `🧾 *Detalle de la cuenta*\nTotal: ${formatClp(
+    billBreakdown.targetTotal,
+  )}\nPagó: ${payer || 'Sin definir'}\n\n${people
+    .map(buildPersonDetail)
+    .join('\n\n')}\n\nGenerado con Cuánto Pago`;
+
+  const buildChargeMessage = (person: string) => {
+    const detail = buildPersonDetail(person);
+    return `¡Hola ${person}! 👋\nTe comparto el detalle de tu parte de la cuenta:\n\n${detail}\n\nTotal a transferir: ${formatClp(
+      totals[person] || 0,
+    )}${includeTransfer ? `\n\n${transferMessage}` : ''}`;
+  };
+
+  const allPeopleExpanded = people.length > 0 && people.every(
+    (person) => expandedPeople[person],
+  );
+
+  const togglePersonDetail = (person: string) => {
+    setExpandedPeople((current) => ({ ...current, [person]: !current[person] }));
+  };
+
+  const toggleAllPeopleDetails = () => {
+    const nextValue = !allPeopleExpanded;
+    setExpandedPeople(Object.fromEntries(people.map((person) => [person, nextValue])));
+  };
+
+  const shareDetailedSummaryImage = async () => {
+    if (!shareImageRef.current) return;
+    try {
+      setSharingImage(true);
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      // Exportamos a mayor ancho, pero NO forzamos la altura.
+      // view-shot conserva la proporción real del resumen y evita crear
+      // el lienzo negro gigante que aparecía en iOS al fijar width + height.
+      const targetWidth = 1080;
+      const uri = await captureRef(shareImageRef, {
+        format: 'png',
+        quality: 1,
+        result: 'tmpfile',
+        width: targetWidth,
+        ...(Platform.OS === 'ios' ? { useRenderInContext: true } : {}),
+      });
+      await shareImage(uri);
+    } catch (error) {
+      console.log('[Cuánto Pago] Error compartiendo imagen:', error);
+      Alert.alert('No pudimos compartir el resumen', 'Inténtalo nuevamente en unos segundos.');
+    } finally {
+      setSharingImage(false);
+    }
+  };
+
   const pasteTransferData = async () => {
     const text = await Clipboard.getStringAsync();
 
@@ -540,6 +681,8 @@ ${people
     setTipMode('proportional');
     setDetectedTipAmount(null);
     setUseDetectedTip(false);
+    setExpandedPeople({});
+    setSharePreviewVisible(false);
   };
 
   if (isHome) {
@@ -729,7 +872,7 @@ ${people
                   <Text style={styles.loadingTitle}>
                     {scanTakingLong
                       ? 'Está tomando un poco más de lo normal'
-                      : 'Gemini está leyendo la boleta'}
+                      : 'Estamos leyendo la boleta'}
                   </Text>
                   <Text style={styles.loadingText}>
                     {scanTakingLong
@@ -739,7 +882,7 @@ ${people
                 </View>
               ) : (
                 <PrimaryButton
-                  label="Leer boleta con Gemini"
+                  label="Leer boleta con IA"
                   icon="✨"
                   onPress={scan}
                   disabled={!imageUri}
@@ -1259,45 +1402,51 @@ ${people
                 </Text>
               </View>
 
+              <View style={styles.summaryListHeader}>
+                <Text style={styles.summaryListTitle}>Detalle por persona</Text>
+                <Pressable onPress={toggleAllPeopleDetails} hitSlop={8}>
+                  <Text style={styles.summaryToggleAll}>{allPeopleExpanded ? 'Ocultar todos' : 'Ver todos'}</Text>
+                </Pressable>
+              </View>
+
               <View style={styles.summaryList}>
-                {people.map((person, index) => (
-                  <View
-                    key={`${person}-${index}`}
-                    style={styles.summaryRow}
-                  >
-                    <PersonAvatar
-                      name={person}
-                      index={index}
-                      size={36}
-                    />
-                    <View style={styles.flex}>
-                      <Text style={styles.summaryPerson}>
-                        {person}
-                        {person === payer ? ' (pagó)' : ''}
-                      </Text>
-                      <Text style={styles.summaryDetail}>
-                        {invitedPeople.includes(person)
-                          ? '🎁 Invitado por el grupo'
-                          : person === payer
-                            ? billBreakdown.invitationShare[person]
-                              ? `Consumo + ${formatClp(
-                                  billBreakdown.invitationShare[person],
-                                )} de invitación`
-                              : 'Consumo personal'
-                            : billBreakdown.invitationShare[person]
-                              ? `Incluye ${formatClp(
-                                  billBreakdown.invitationShare[person],
-                                )} de invitación`
-                              : totals[person]
-                                ? 'Debe transferir'
-                                : 'Sin deuda'}
-                      </Text>
+                {people.map((person, index) => {
+                  const isExpanded = !!expandedPeople[person];
+                  const detailItems = getPersonItemDetails(person);
+                  const own = Math.round(billBreakdown.ownConsumption[person] || 0);
+                  const invitation = Math.round(billBreakdown.invitationShare[person] || 0);
+                  const total = Math.round(totals[person] || 0);
+                  const invited = invitedPeople.includes(person);
+                  const personTip = invited ? 0 : Math.max(0, total - own - invitation);
+                  return (
+                    <View key={`${person}-${index}`} style={styles.summaryPersonCard}>
+                      <Pressable style={styles.summaryRow} onPress={() => togglePersonDetail(person)}>
+                        <PersonAvatar name={person} index={index} size={36} />
+                        <View style={styles.flex}>
+                          <Text style={styles.summaryPerson}>{person}{person === payer ? ' (pagó)' : ''}</Text>
+                          <Text style={styles.summaryDetail}>
+                            {invited ? '🎁 Invitado por el grupo' : total ? 'Toca para ver qué consumió' : 'Sin deuda'}
+                          </Text>
+                        </View>
+                        <Text style={styles.summaryAmount}>{formatClp(total)}</Text>
+                        <Text style={styles.summaryChevron}>{isExpanded ? '⌃' : '⌄'}</Text>
+                      </Pressable>
+                      {isExpanded && (
+                        <View style={styles.summaryExpanded}>
+                          {detailItems.length ? detailItems.map((line, lineIndex) => (
+                            <View key={`${person}-${line.name}-${lineIndex}`} style={styles.summaryLine}>
+                              <Text style={styles.summaryLineLabel}>{line.name}{line.sharedBy > 1 ? ` · parte de ${line.sharedBy}` : ''}</Text>
+                              <Text style={styles.summaryLineAmount}>{formatClp(line.roundedAmount)}</Text>
+                            </View>
+                          )) : <Text style={styles.summaryEmpty}>Sin productos asignados</Text>}
+                          {invitation > 0 && <View style={styles.summaryLine}><Text style={styles.summaryLineLabel}>🎁 Parte de invitación</Text><Text style={styles.summaryLineAmount}>{formatClp(invitation)}</Text></View>}
+                          {personTip > 0 && <View style={styles.summaryLine}><Text style={styles.summaryLineLabel}>Propina</Text><Text style={styles.summaryLineAmount}>{formatClp(personTip)}</Text></View>}
+                          <View style={[styles.summaryLine, styles.summaryLineTotal]}><Text style={styles.summaryLineTotalText}>Total</Text><Text style={styles.summaryLineTotalText}>{formatClp(total)}</Text></View>
+                        </View>
+                      )}
                     </View>
-                    <Text style={styles.summaryAmount}>
-                      {formatClp(totals[person] || 0)}
-                    </Text>
-                  </View>
-                ))}
+                  );
+                })}
               </View>
 
               <View style={styles.recoverCard}>
@@ -1310,13 +1459,19 @@ ${people
               </View>
 
               <PrimaryButton
-                label="Compartir por WhatsApp"
+                label="Compartir resumen"
                 icon="💬"
                 onPress={() =>
                   shareOnWhatsApp(groupMessage).catch((error) =>
                     Alert.alert('Error', error.message),
                   )
                 }
+              />
+
+              <SecondaryButton
+                label="Compartir detalle como imagen"
+                icon="🧾"
+                onPress={() => setSharePreviewVisible(true)}
               />
 
               {includeTransfer && (
@@ -1344,17 +1499,7 @@ ${people
                       totals[person] || 0,
                     )}`}
                     onPress={() => {
-                      const message = `¡Hola ${person}! 👋 Tu parte de la cuenta es ${formatClp(
-                        totals[person] || 0,
-                      )} (incluye ${
-                        Number(tipPercent) || 0
-                      }% de propina, ${tipMode === 'equal' ? 'dividida en partes iguales' : 'proporcional al consumo'}).${
-                        includeTransfer
-                          ? `\n\n${transferMessage}`
-                          : ''
-                      }`;
-
-                      shareOnWhatsApp(message).catch((error) =>
+                      shareOnWhatsApp(buildChargeMessage(person)).catch((error) =>
                         Alert.alert('Error', error.message),
                       );
                     }}
@@ -1387,6 +1532,51 @@ ${people
         onSelect={selectSavedAccount}
         onDelete={removeSavedAccount}
       />
+
+      <Modal
+        visible={sharePreviewVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSharePreviewVisible(false)}
+      >
+        <View style={styles.sharePreviewBackdrop}>
+          <ScrollView contentContainerStyle={styles.sharePreviewScroll} showsVerticalScrollIndicator={false}>
+            <View ref={shareImageRef} collapsable={false} style={styles.shareImageCard}>
+              <View style={styles.shareImageBrandRow}>
+                <Image source={require('./assets/cuanto-pago-logo.png')} style={styles.shareImageLogo} />
+                <View><Text style={styles.shareImageBrand}>Cuánto Pago</Text><Text style={styles.shareImageSubtitle}>Detalle de la cuenta</Text></View>
+              </View>
+              <View style={styles.shareImageTotalBox}>
+                <Text style={styles.shareImageTotalLabel}>Total de la cuenta</Text>
+                <Text style={styles.shareImageTotalAmount}>{formatClp(billBreakdown.targetTotal)}</Text>
+                <Text style={styles.shareImagePayer}>Pagó: {payer || 'Sin definir'}</Text>
+              </View>
+              {people.map((person, index) => {
+                const detailItems = getPersonItemDetails(person);
+                const own = Math.round(billBreakdown.ownConsumption[person] || 0);
+                const invitation = Math.round(billBreakdown.invitationShare[person] || 0);
+                const total = Math.round(totals[person] || 0);
+                const invited = invitedPeople.includes(person);
+                const personTip = invited ? 0 : Math.max(0, total - own - invitation);
+                return (
+                  <View key={`share-${person}-${index}`} style={styles.shareImagePersonCard}>
+                    <View style={styles.shareImagePersonHeader}><View style={styles.flex}><Text style={styles.shareImagePersonName}>{person}{person === payer ? ' · pagó' : ''}</Text>{invited && <Text style={styles.shareImageInvited}>🎁 Invitado por el grupo</Text>}</View><Text style={styles.shareImagePersonTotal}>{formatClp(total)}</Text></View>
+                    {detailItems.map((line, lineIndex) => <View key={`share-line-${lineIndex}`} style={styles.shareImageLine}><Text style={styles.shareImageLineLabel}>{line.name}{line.sharedBy > 1 ? ` · parte de ${line.sharedBy}` : ''}</Text><Text style={styles.shareImageLineAmount}>{formatClp(line.roundedAmount)}</Text></View>)}
+                    {invitation > 0 && <View style={styles.shareImageLine}><Text style={styles.shareImageLineLabel}>🎁 Parte de invitación</Text><Text style={styles.shareImageLineAmount}>{formatClp(invitation)}</Text></View>}
+                    {personTip > 0 && <View style={styles.shareImageLine}><Text style={styles.shareImageLineLabel}>Propina</Text><Text style={styles.shareImageLineAmount}>{formatClp(personTip)}</Text></View>}
+                  </View>
+                );
+              })}
+              <View style={styles.shareImageRecover}><Text style={styles.shareImageRecoverLabel}>{payer || 'Quien pagó'} debe recuperar</Text><Text style={styles.shareImageRecoverAmount}>{formatClp(recoverAmount)}</Text></View>
+              <Text style={styles.shareImageFooter}>Generado con Cuánto Pago</Text>
+            </View>
+            <View style={styles.sharePreviewActions}>
+              <PrimaryButton label={sharingImage ? 'Preparando imagen…' : 'Compartir imagen'} icon="💬" disabled={sharingImage} onPress={shareDetailedSummaryImage} />
+              <SecondaryButton label="Cerrar" onPress={() => setSharePreviewVisible(false)} />
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
 
       <Modal
         visible={saveAccountModalVisible}
@@ -2443,6 +2633,42 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '900',
   },
+  summaryListHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 },
+  summaryListTitle: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
+  summaryToggleAll: { color: '#D9CBFF', fontSize: 13, fontWeight: '900' },
+  summaryPersonCard: { backgroundColor: '#1C2353', borderRadius: 16, overflow: 'hidden' },
+  summaryChevron: { color: '#D9CBFF', fontSize: 18, fontWeight: '900', marginLeft: 2 },
+  summaryExpanded: { borderTopWidth: 1, borderTopColor: '#30386B', paddingHorizontal: 14, paddingBottom: 12, paddingTop: 8, gap: 7 },
+  summaryLine: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  summaryLineLabel: { flex: 1, color: '#D6D4E4', fontSize: 12, lineHeight: 17 },
+  summaryLineAmount: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
+  summaryEmpty: { color: '#AAA7BF', fontSize: 12 },
+  summaryLineTotal: { borderTopWidth: 1, borderTopColor: '#3A4277', paddingTop: 8, marginTop: 2 },
+  summaryLineTotalText: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
+  sharePreviewBackdrop: { flex: 1, backgroundColor: 'rgba(18,24,63,0.72)' },
+  sharePreviewScroll: { padding: 18, paddingTop: 54, paddingBottom: 38, gap: 14 },
+  shareImageCard: { backgroundColor: '#12183F', borderRadius: 24, padding: 18, gap: 14 },
+  shareImageBrandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  shareImageLogo: { width: 42, height: 42, borderRadius: 10 },
+  shareImageBrand: { color: '#FFFFFF', fontSize: 20, fontWeight: '900' },
+  shareImageSubtitle: { color: '#C6C3D9', fontSize: 12, marginTop: 1 },
+  shareImageTotalBox: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 15, alignItems: 'center' },
+  shareImageTotalLabel: { color: '#73778B', fontSize: 12, fontWeight: '800' },
+  shareImageTotalAmount: { color: '#12183F', fontSize: 28, fontWeight: '900', marginTop: 3 },
+  shareImagePayer: { color: '#6C45E8', fontSize: 12, fontWeight: '900', marginTop: 5 },
+  shareImagePersonCard: { backgroundColor: '#1C2353', borderRadius: 15, padding: 13, gap: 6 },
+  shareImagePersonHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 3 },
+  shareImagePersonName: { color: '#FFFFFF', fontSize: 15, fontWeight: '900' },
+  shareImageInvited: { color: '#E9C86A', fontSize: 10, fontWeight: '800', marginTop: 2 },
+  shareImagePersonTotal: { color: '#FFFFFF', fontSize: 16, fontWeight: '900' },
+  shareImageLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
+  shareImageLineLabel: { flex: 1, color: '#D6D4E4', fontSize: 11, lineHeight: 15 },
+  shareImageLineAmount: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
+  shareImageRecover: { backgroundColor: '#EEE8FF', borderRadius: 16, padding: 13, alignItems: 'center' },
+  shareImageRecoverLabel: { color: '#5E5775', fontSize: 11, fontWeight: '800' },
+  shareImageRecoverAmount: { color: '#6C45E8', fontSize: 24, fontWeight: '900', marginTop: 2 },
+  shareImageFooter: { color: '#9F9BB8', fontSize: 10, textAlign: 'center', fontWeight: '700' },
+  sharePreviewActions: { gap: 10 },
   recoverCard: {
     backgroundColor: '#EEE8FF',
     borderRadius: 18,
