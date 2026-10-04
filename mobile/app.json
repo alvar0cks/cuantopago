@@ -41,9 +41,11 @@
       [
         "react-native-google-mobile-ads",
         {
-          "androidAppId": "ca-app-pub-5707119033456291~7920304262"
+          "androidAppId": "ca-app-pub-5707119033456291~7920304262",
+          "iosAppId": "ca-app-pub-5707119033456291~8695985845"
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "extra": {
       "eas": {
