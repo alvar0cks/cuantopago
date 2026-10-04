@@ -137,6 +137,8 @@ export async function initializeAdMob(): Promise<void> {
  * Build nativo -> muestra el anuncio solo si está listo y corresponde.
  * Sin anuncio -> la acción del usuario continúa normalmente.
  */
+
+/*
 export async function showInterstitialIfEligible(): Promise<boolean> {
   if (isExpoGo()) return false;
 
