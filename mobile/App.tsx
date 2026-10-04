@@ -123,6 +123,8 @@ function Main() {
   const [expandedPeople, setExpandedPeople] = useState<Record<string, boolean>>({});
   const [sharePreviewVisible, setSharePreviewVisible] = useState(false);
   const [sharingImage, setSharingImage] = useState(false);
+  const [detailSectionOpen, setDetailSectionOpen] = useState(false);
+  const [chargeSectionOpen, setChargeSectionOpen] = useState(false);
 
   useEffect(() => {
     void initializeAdMob();
@@ -564,6 +566,11 @@ ${people
     setExpandedPeople(Object.fromEntries(people.map((person) => [person, nextValue])));
   };
 
+  const runAdThen = async (action: () => void | Promise<void>) => {
+    await showInterstitialIfEligible();
+    await action();
+  };
+
   const shareDetailedSummaryImage = async () => {
     if (!shareImageRef.current) return;
     try {
@@ -580,6 +587,7 @@ ${people
         width: targetWidth,
         ...(Platform.OS === 'ios' ? { useRenderInContext: true } : {}),
       });
+      await showInterstitialIfEligible();
       await shareImage(uri);
     } catch (error) {
       console.log('[Cuánto Pago] Error compartiendo imagen:', error);
@@ -683,6 +691,8 @@ ${people
     setUseDetectedTip(false);
     setExpandedPeople({});
     setSharePreviewVisible(false);
+    setDetailSectionOpen(false);
+    setChargeSectionOpen(false);
   };
 
   if (isHome) {
@@ -979,6 +989,13 @@ ${people
               </View>
             ))}
 
+            {items.some((item) => Number(item.price || 0) <= 0) && (
+              <View style={styles.zeroPriceNotice}>
+                <Text style={styles.zeroPriceNoticeTitle}>ℹ️ Hay productos con valor $0</Text>
+                <Text style={styles.zeroPriceNoticeText}>No se incluirán en el reparto y se quitarán automáticamente al continuar.</Text>
+              </View>
+            )}
+
             <SecondaryButton
               label="Agregar producto"
               icon="＋"
@@ -994,10 +1011,13 @@ ${people
 
             <NavButtons
               back={() => setStep(0)}
-              next={() => setStep(2)}
+              next={() => {
+                setItems((current) => current.filter((item) => Number(item.price || 0) > 0));
+                setStep(2);
+              }}
               nextDisabled={
-                !items.length ||
-                items.some((item) => !item.name || item.price <= 0)
+                !items.some((item) => Number(item.price || 0) > 0) ||
+                items.some((item) => Number(item.price || 0) > 0 && !item.name.trim())
               }
             />
           </Card>
@@ -1143,14 +1163,7 @@ ${people
 
             <NavButtons
               back={() => setStep(2)}
-              next={() => {
-                setStep(4);
-                // Punto natural: la cuenta ya fue repartida y pasamos a Cobro.
-                // El anuncio solo aparece si está precargado y respeta el límite.
-                setTimeout(() => {
-                  void showInterstitialIfEligible();
-                }, 250);
-              }}
+              next={() => setStep(4)}
               nextDisabled={items.some(
                 (item) => !(assignments[item.id] || []).length,
               )}
@@ -1461,50 +1474,39 @@ ${people
               <PrimaryButton
                 label="Compartir resumen"
                 icon="💬"
-                onPress={() =>
-                  shareOnWhatsApp(groupMessage).catch((error) =>
-                    Alert.alert('Error', error.message),
-                  )
-                }
+                onPress={() => runAdThen(() => shareOnWhatsApp(groupMessage)).catch((error) => Alert.alert('Error', error.message))}
               />
 
-              <SecondaryButton
-                label="Compartir detalle como imagen"
-                icon="🧾"
-                onPress={() => setSharePreviewVisible(true)}
-              />
-
-              {includeTransfer && (
-                <SecondaryButton
-                  label="Compartir datos de transferencia"
-                  icon="🏦"
-                  onPress={() =>
-                    shareOnWhatsApp(transferMessage).catch(
-                      (error) =>
-                        Alert.alert('Error', error.message),
-                    )
-                  }
-                />
+              <Pressable style={styles.actionSectionHeader} onPress={() => setDetailSectionOpen((value) => !value)}>
+                <View style={styles.flex}>
+                  <Text style={styles.actionSectionTitle}>🧾 Ver y compartir detalle</Text>
+                  <Text style={styles.actionSectionHint}>Imagen y datos de transferencia</Text>
+                </View>
+                <Text style={styles.actionSectionChevron}>{detailSectionOpen ? '⌃' : '⌄'}</Text>
+              </Pressable>
+              {detailSectionOpen && (
+                <View style={styles.actionSectionBody}>
+                  <SecondaryButton label="Compartir detalle como imagen" icon="🧾" onPress={() => setSharePreviewVisible(true)} />
+                  {includeTransfer && (
+                    <SecondaryButton label="Compartir datos de transferencia" icon="🏦" onPress={() => runAdThen(() => shareOnWhatsApp(transferMessage)).catch((error) => Alert.alert('Error', error.message))} />
+                  )}
+                </View>
               )}
 
-              {people
-                .filter(
-                  (person) =>
-                    person !== payer && !invitedPeople.includes(person),
-                )
-                .map((person) => (
-                  <SecondaryButton
-                    key={person}
-                    label={`Cobrar a ${person}: ${formatClp(
-                      totals[person] || 0,
-                    )}`}
-                    onPress={() => {
-                      shareOnWhatsApp(buildChargeMessage(person)).catch((error) =>
-                        Alert.alert('Error', error.message),
-                      );
-                    }}
-                  />
-                ))}
+              <Pressable style={styles.actionSectionHeader} onPress={() => setChargeSectionOpen((value) => !value)}>
+                <View style={styles.flex}>
+                  <Text style={styles.actionSectionTitle}>💸 Cobrar individualmente</Text>
+                  <Text style={styles.actionSectionHint}>Envía el cobro a cada persona</Text>
+                </View>
+                <Text style={styles.actionSectionChevron}>{chargeSectionOpen ? '⌃' : '⌄'}</Text>
+              </Pressable>
+              {chargeSectionOpen && (
+                <View style={styles.actionSectionBody}>
+                  {people.filter((person) => person !== payer && !invitedPeople.includes(person)).map((person) => (
+                    <SecondaryButton key={person} label={`Cobrar a ${person}: ${formatClp(totals[person] || 0)}`} onPress={() => shareOnWhatsApp(buildChargeMessage(person)).catch((error) => Alert.alert('Error', error.message))} />
+                  ))}
+                </View>
+              )}
 
               <View style={styles.row}>
                 <View style={styles.flex}>
@@ -2669,6 +2671,14 @@ const styles = StyleSheet.create({
   shareImageRecoverAmount: { color: '#6C45E8', fontSize: 24, fontWeight: '900', marginTop: 2 },
   shareImageFooter: { color: '#9F9BB8', fontSize: 10, textAlign: 'center', fontWeight: '700' },
   sharePreviewActions: { gap: 10 },
+  zeroPriceNotice: { backgroundColor: '#F5F1FF', borderRadius: 14, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#DED4FF' },
+  zeroPriceNoticeTitle: { color: '#33246B', fontSize: 13, fontWeight: '900' },
+  zeroPriceNoticeText: { color: '#655F76', fontSize: 12, lineHeight: 17, marginTop: 3 },
+  actionSectionHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 16, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 1, borderColor: '#E3E0EC' },
+  actionSectionTitle: { color: '#12183F', fontSize: 15, fontWeight: '900' },
+  actionSectionHint: { color: '#77788A', fontSize: 11, marginTop: 2 },
+  actionSectionChevron: { color: '#6C45E8', fontSize: 20, fontWeight: '900', marginLeft: 10 },
+  actionSectionBody: { gap: 8 },
   recoverCard: {
     backgroundColor: '#EEE8FF',
     borderRadius: 18,
