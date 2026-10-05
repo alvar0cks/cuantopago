@@ -26,7 +26,7 @@ import {
   SecondaryButton,
 } from './src/components/Ui';
 import { analyzeReceipt } from './src/services/api';
-import { initializeAdMob, showInterstitialIfEligible } from './src/services/adMob';
+import { initializeAdMob } from './src/services/adMob';
 import {
   deleteTransferAccount,
   loadTransferAccounts,
@@ -566,10 +566,6 @@ ${people
     setExpandedPeople(Object.fromEntries(people.map((person) => [person, nextValue])));
   };
 
-  const runAdThen = async (action: () => void | Promise<void>) => {
-    await showInterstitialIfEligible();
-    await action();
-  };
 
   const shareDetailedSummaryImage = async () => {
     if (!shareImageRef.current) return;
@@ -587,7 +583,6 @@ ${people
         width: targetWidth,
         ...(Platform.OS === 'ios' ? { useRenderInContext: true } : {}),
       });
-      await showInterstitialIfEligible();
       await shareImage(uri);
     } catch (error) {
       console.log('[Cuánto Pago] Error compartiendo imagen:', error);
@@ -1474,7 +1469,7 @@ ${people
               <PrimaryButton
                 label="Compartir resumen"
                 icon="💬"
-                onPress={() => runAdThen(() => shareOnWhatsApp(groupMessage)).catch((error) => Alert.alert('Error', error.message))}
+                onPress={() => shareOnWhatsApp(groupMessage).catch((error) => Alert.alert('Error', error.message))}
               />
 
               <Pressable style={styles.actionSectionHeader} onPress={() => setDetailSectionOpen((value) => !value)}>
@@ -1488,7 +1483,7 @@ ${people
                 <View style={styles.actionSectionBody}>
                   <SecondaryButton label="Compartir detalle como imagen" icon="🧾" onPress={() => setSharePreviewVisible(true)} />
                   {includeTransfer && (
-                    <SecondaryButton label="Compartir datos de transferencia" icon="🏦" onPress={() => runAdThen(() => shareOnWhatsApp(transferMessage)).catch((error) => Alert.alert('Error', error.message))} />
+                    <SecondaryButton label="Compartir datos de transferencia" icon="🏦" onPress={() => shareOnWhatsApp(transferMessage).catch((error) => Alert.alert('Error', error.message))} />
                   )}
                 </View>
               )}
@@ -1526,6 +1521,8 @@ ${people
           </>
         )}
       </ScrollView>
+
+      <AppBanner />
 
       <AccountsModal
         visible={accountsModalVisible}
@@ -1621,6 +1618,47 @@ ${people
       </Modal>
     </KeyboardAvoidingView>
   );
+}
+
+
+function AppBanner() {
+  try {
+    const Constants = require('expo-constants').default;
+    const isExpoGo =
+      Constants?.executionEnvironment === 'storeClient' ||
+      Constants?.appOwnership === 'expo';
+
+    if (isExpoGo) return null;
+
+    const ads = require('react-native-google-mobile-ads');
+    const unitId = __DEV__
+      ? ads.TestIds.ADAPTIVE_BANNER
+      : Platform.select({
+          ios: 'ca-app-pub-5707119033456291/4377514617',
+          android: 'ca-app-pub-5707119033456291/8373348372',
+          default: ads.TestIds.ADAPTIVE_BANNER,
+        });
+
+    return (
+      <View style={styles.bannerContainer}>
+        <ads.BannerAd
+          unitId={unitId}
+          size={ads.BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
+          requestOptions={{ requestNonPersonalizedAdsOnly: false }}
+          onAdFailedToLoad={(error: unknown) => {
+            if (__DEV__) {
+              console.log('[Cuánto Pago] Banner AdMob no disponible:', error);
+            }
+          }}
+        />
+      </View>
+    );
+  } catch (error) {
+    if (__DEV__) {
+      console.log('[Cuánto Pago] Banner AdMob desactivado en este entorno.');
+    }
+    return null;
+  }
 }
 
 function AccountsModal({
@@ -1789,6 +1827,13 @@ function NavButtons({
 }
 
 const styles = StyleSheet.create({
+  bannerContainer: {
+    minHeight: 50,
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FBFAFF',
+  },
   safe: { flex: 1, backgroundColor: '#FBFAFF' },
   flex: { flex: 1 },
   homeScreen: {
