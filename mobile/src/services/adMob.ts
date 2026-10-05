@@ -38,7 +38,7 @@ function getInterstitial(): any | null {
   const ads = getAdsModule();
   if (!ads) return null;
   const unitId = __DEV__ ? ads.TestIds.INTERSTITIAL : Platform.select({
-    ios: 'ca-app-pub-5707119033456291/9251443056',
+    ios: 'ca-app-pub-5707119033456291/1842850611',
     android: 'ca-app-pub-5707119033456291/5074011042',
     default: ads.TestIds.INTERSTITIAL,
   });
