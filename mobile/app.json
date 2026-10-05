@@ -7,7 +7,7 @@
     "userInterfaceStyle": "light",
     "scheme": "cuantopago",
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "bundleIdentifier": "com.cuantopago.app",
       "infoPlist": {
         "NSCameraUsageDescription": "Cuánto Pago usa la cámara para fotografiar la boleta.",
