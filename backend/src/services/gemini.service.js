@@ -123,7 +123,7 @@ export async function analyzeReceipt({ buffer, mimeType }) {
   }
 
   const ai = new GoogleGenAI({ apiKey });
-  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 
   const response = await generateWithRetry(ai, {
     model,
