@@ -102,6 +102,7 @@ function Main() {
   const [imageMime, setImageMime] = useState('image/jpeg');
   const [loading, setLoading] = useState(false);
   const [scanTakingLong, setScanTakingLong] = useState(false);
+  const [scanSeconds, setScanSeconds] = useState(0);
   const [loadingTestReceipt, setLoadingTestReceipt] = useState(false);
   const [items, setItems] = useState<ReceiptItem[]>([]);
   const [people, setPeople] = useState<string[]>([]);
@@ -149,17 +150,30 @@ function Main() {
     });
   }, [step]);
 
+  // Al iniciar el análisis, enfocar automáticamente el cronómetro
+  // sin depender de que el usuario se desplace hasta el final.
+  useEffect(() => {
+    if (!loading) return;
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
+    });
+  }, [loading]);
+
   useEffect(() => {
     if (!loading) {
       setScanTakingLong(false);
       return;
     }
 
-    const timeout = setTimeout(() => {
-      setScanTakingLong(true);
-    }, 8000);
+    setScanSeconds(0);
+    const startedAt = Date.now();
+    const interval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      setScanSeconds(elapsed);
+      if (elapsed >= 8) setScanTakingLong(true);
+    }, 1000);
 
-    return () => clearTimeout(timeout);
+    return () => clearInterval(interval);
   }, [loading]);
 
   const selectImage = (uri: string, mimeType = 'image/jpeg') => {
@@ -438,6 +452,8 @@ function Main() {
     useDetectedTip,
   ]);
 
+  const pendingItems = items.filter((item) => !(assignments[item.id] || []).some((name) => people.includes(name)));
+  const assignedCount = items.length - pendingItems.length;
   const totals = billBreakdown.totals;
 
   const totalReceipt = items.reduce(
@@ -826,6 +842,8 @@ ${people
         {step === 0 && (
           <>
             <Card>
+              {!loading && (
+              <>
               <View style={styles.receiptFrame}>
                 {imageUri ? (
                   <Image
@@ -871,22 +889,27 @@ ${people
                 />
               )}
 
+              </>
+              )}
+
               {loading ? (
                 <View style={styles.loadingBox}>
                   <ActivityIndicator size="large" color="#6C45E8" />
                   <Text style={styles.loadingTitle}>
                     {scanTakingLong
-                      ? 'Está tomando un poco más de lo normal'
+                      ? 'Seguimos analizando tu boleta'
                       : 'Estamos leyendo la boleta'}
                   </Text>
                   <Text style={styles.loadingText}>
                     {scanTakingLong
-                      ? 'Seguimos procesando tu boleta. No necesitas hacer nada.'
-                      : 'Esto puede tardar unos segundos.'}
-                  </Text>
-                </View>
+                      ? 'Las boletas extensas pueden tardar cerca de un minuto. La lectura continúa; no cierres esta pantalla.'
+                      : 'Estamos enviando y analizando los productos. Espera un momento.'}
+                                     </Text>
+                   <Text style={styles.scanElapsed}>Tiempo transcurrido: {scanSeconds} s</Text>
+                   <Text style={styles.scanActivity}>● Procesamiento en curso</Text>
+                 </View>
               ) : (
-                <PrimaryButton
+                 <PrimaryButton
                   label="Leer boleta con IA"
                   icon="✨"
                   onPress={scan}
@@ -1094,11 +1117,21 @@ ${people
             <Text style={styles.cardTitle}>Asigna los productos</Text>
             <Text style={styles.muted}>
               Toca una o varias personas para indicar quién consumió cada
-              producto.
+              producto. Puedes seleccionar varias personas si compartieron un plato.
             </Text>
 
-            {items.map((item) => (
-              <View key={item.id} style={styles.assignmentCard}>
+                         <View style={styles.assignmentProgress}>
+               <Text style={styles.assignmentProgressTitle}>
+                 {pendingItems.length === 0 ? '✓ Todos los productos asignados' : `${pendingItems.length} ${pendingItems.length === 1 ? 'producto pendiente' : 'productos pendientes'}`}
+               </Text>
+               <Text style={styles.assignmentProgressText}>{assignedCount} de {items.length} productos asignados. {pendingItems.length ? 'Debes asignar todos para continuar.' : 'Ya puedes continuar al cobro.'}</Text>
+               <View style={styles.assignmentProgressTrack}>
+                 <View style={[styles.assignmentProgressFill, { width: `${items.length ? (assignedCount / items.length) * 100 : 0}%` }]} />
+               </View>
+             </View>
+
+             {items.map((item) => (
+               <View key={item.id} style={[styles.assignmentCard, !(assignments[item.id] || []).some((name) => people.includes(name)) && styles.assignmentCardPending]}>
                 <View style={styles.spaceBetween}>
                   <Text style={styles.itemName}>{item.name}</Text>
                   <Text style={styles.itemPrice}>
@@ -1145,7 +1178,10 @@ ${people
                   })}
                 </View>
 
-                {!!(assignments[item.id] || []).length && (
+                                 {!(assignments[item.id] || []).some((name) => people.includes(name)) && (
+                   <Text style={styles.assignmentPendingHint}>⚠ Falta seleccionar quién consumió este producto</Text>
+                 )}
+                 {!!(assignments[item.id] || []).length && (
                   <Text style={styles.assignmentHint}>
                     Se divide entre {(assignments[item.id] || []).length}{' '}
                     {(assignments[item.id] || []).length === 1
@@ -1158,10 +1194,14 @@ ${people
 
             <NavButtons
               back={() => setStep(2)}
-              next={() => setStep(4)}
-              nextDisabled={items.some(
-                (item) => !(assignments[item.id] || []).length,
-              )}
+                             next={() => {
+                 if (pendingItems.length) {
+                   Alert.alert('Productos sin asignar', `Faltan ${pendingItems.length} productos. Selecciona al menos una persona para cada uno antes de continuar.`);
+                   return;
+                 }
+                 setStep(4);
+               }}
+               nextDisabled={pendingItems.length > 0}
             />
           </Card>
         )}
@@ -2274,6 +2314,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginTop: 10,
   },
+  scanElapsed: { color: '#6C45E8', fontWeight: '900', marginTop: 10, fontSize: 14 },
+  scanActivity: { color: '#53715B', fontWeight: '800', marginTop: 5, fontSize: 12 },
   loadingText: {
     color: '#7B7F93',
     marginTop: 4,
@@ -2474,6 +2516,15 @@ const styles = StyleSheet.create({
   avatarText: {
     fontWeight: '900',
   },
+  assignmentProgress: { padding: 14, borderRadius: 16, backgroundColor: '#F5F1FF', borderWidth: 1, borderColor: '#DED4FF', gap: 7 },
+  assignmentProgressTitle: { color: '#33246B', fontSize: 16, fontWeight: '900' },
+  assignmentProgressText: { color: '#655F76', fontSize: 13, lineHeight: 19 },
+  assignmentProgressTrack: { height: 7, backgroundColor: '#E3DCF3', borderRadius: 8, overflow: 'hidden' },
+  assignmentProgressFill: { height: '100%', backgroundColor: '#6C45E8', borderRadius: 8 },
+  pendingFilter: { alignSelf: 'flex-start', paddingVertical: 8, paddingHorizontal: 12, backgroundColor: '#FFFFFF', borderRadius: 10, borderWidth: 1, borderColor: '#D5C8F5', marginTop: 3 },
+  pendingFilterText: { color: '#5E38D8', fontWeight: '900', fontSize: 13 },
+  assignmentCardPending: { backgroundColor: '#FFF9F3', borderLeftWidth: 3, borderLeftColor: '#D98B36', paddingHorizontal: 12, borderRadius: 10 },
+  assignmentPendingHint: { color: '#A45B20', fontWeight: '800', fontSize: 12 },
   assignmentCard: {
     gap: 12,
     paddingVertical: 14,
