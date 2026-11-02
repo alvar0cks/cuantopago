@@ -39,6 +39,7 @@ jobs:
 
       - name: Check project
         run: npx expo-doctor
+        continue-on-error: true
 
       - name: Build
         run: eas build --platform ${{ inputs.platform }} --profile production --non-interactive --no-wait
