@@ -41,4 +41,4 @@ jobs:
         run: npx expo-doctor
 
       - name: Build
-        run: eas build --platform ${{ inputs.platform }} --profile preview --non-interactive --no-wait
+        run: eas build --platform ${{ inputs.platform }} --profile production --non-interactive --no-wait
