@@ -20,14 +20,17 @@
       "package": "com.cuantopago.app",
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.READ_MEDIA_IMAGES",
         "android.permission.RECORD_AUDIO"
       ],
       "icon": "./assets/cuanto-pago-logo.png",
       "adaptiveIcon": {
         "foregroundImage": "./assets/cuanto-pago-adaptive.png",
         "backgroundColor": "#FFFFFF"
-      }
+      },
+      "blockedPermissions": [
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO"
+      ]
     },
     "plugins": [
       [
