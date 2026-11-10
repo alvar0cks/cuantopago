@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Asset } from 'expo-asset';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { getPendingBills, savePendingBill, deletePendingBill, type PendingBill } from './src/services/pendingBills';
 import { StatusBar } from 'expo-status-bar';
 import {
   ActivityIndicator,
@@ -97,6 +99,14 @@ function Main() {
   const shareImageRef = useRef<View>(null);
 
   const [isHome, setIsHome] = useState(true);
+  const [pendingBills, setPendingBills] = useState<PendingBill[]>([]);
+  const [pendingSheetVisible, setPendingSheetVisible] = useState(false);
+  // pending-sheet-scan-v12
+  const [pendingSheetMode, setPendingSheetMode] = useState<'view' | 'new' | 'confirm'>('view');
+  const [activePendingId, setActivePendingId] = useState<string | null>(null);
+  // inline-save-feedback-v12
+  const [saveFeedback, setSaveFeedback] = useState<'success' | 'error' | null>(null);
+  const [rotating, setRotating] = useState(false);
   const [step, setStep] = useState(0);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageMime, setImageMime] = useState('image/jpeg');
@@ -126,6 +136,10 @@ function Main() {
   const [sharingImage, setSharingImage] = useState(false);
   const [detailSectionOpen, setDetailSectionOpen] = useState(false);
   const [chargeSectionOpen, setChargeSectionOpen] = useState(false);
+
+  useEffect(() => {
+    getPendingBills().then(setPendingBills).catch(console.error);
+  }, []);
 
   useEffect(() => {
     void initializeAdMob();
@@ -181,6 +195,17 @@ function Main() {
     setImageMime(mimeType);
   };
 
+  const rotateReceipt = async () => {
+    if (!imageUri || rotating) return;
+    setRotating(true);
+    try {
+      const result = await ImageManipulator.manipulateAsync(imageUri, [{ rotate: 90 }], { compress: 0.92, format: ImageManipulator.SaveFormat.JPEG });
+      selectImage(result.uri, 'image/jpeg');
+    } catch {
+      Alert.alert('No se pudo girar', 'Prueba seleccionando nuevamente la foto.');
+    } finally { setRotating(false); }
+  };
+
   const pickImage = async (camera: boolean) => {
     const permission = camera
       ? await ImagePicker.requestCameraPermissionsAsync()
@@ -206,7 +231,16 @@ function Main() {
 
     if (!result.canceled) {
       const selected = result.assets[0];
-      selectImage(selected.uri, selected.mimeType || 'image/jpeg');
+      // Normaliza fotografías apaisadas para que la boleta quede vertical.
+      // El usuario puede girarla manualmente si el texto quedó de lado.
+      if (selected.width && selected.height && selected.width > selected.height) {
+        try {
+          const corrected = await ImageManipulator.manipulateAsync(selected.uri, [{ rotate: 90 }], { compress: 0.92, format: ImageManipulator.SaveFormat.JPEG });
+          selectImage(corrected.uri, 'image/jpeg');
+        } catch { selectImage(selected.uri, selected.mimeType || 'image/jpeg'); }
+      } else {
+        selectImage(selected.uri, selected.mimeType || 'image/jpeg');
+      }
     }
   };
 
@@ -688,8 +722,55 @@ ${people
     setSavedAccounts(updated);
   };
 
+  useEffect(() => {
+    if (!saveFeedback) return;
+    const timeout = setTimeout(() => setSaveFeedback(null), 4500);
+    return () => clearTimeout(timeout);
+  }, [saveFeedback]);
+
+  const continueLater = async () => {
+    if (!items.length) return;
+    try {
+      const bill: PendingBill = {
+        id: activePendingId || `bill-${Date.now()}`,
+        savedAt: new Date().toISOString(), step,
+        items, people, invitedPeople, assignments, payer, tipPercent, tipMode,
+        detectedTipAmount, useDetectedTip, includeTransfer, transfer,
+      };
+      const updated = await savePendingBill(bill);
+      setPendingBills(updated);
+      setActivePendingId(null);
+      reset();
+      setSaveFeedback('success');
+      setIsHome(true);
+    } catch {
+      // No borrar el formulario si falla el almacenamiento.
+      setSaveFeedback('error');
+    }
+  };
+
+  const resumeBill = (bill: PendingBill) => {
+    setItems(bill.items); setPeople(bill.people); setInvitedPeople(bill.invitedPeople);
+    setAssignments(bill.assignments); setPayer(bill.payer);
+    setTipPercent(bill.tipPercent); setTipMode(bill.tipMode);
+    setDetectedTipAmount(bill.detectedTipAmount); setUseDetectedTip(bill.useDetectedTip);
+    setIncludeTransfer(bill.includeTransfer); setTransfer(bill.transfer);
+    setActivePendingId(bill.id); setStep(Math.max(1, Math.min(4, bill.step)));
+    setImageUri(null); setIsHome(false);
+  };
+
+  const removePending = (id: string) => {
+    Alert.alert('Eliminar cuenta', '¿Quieres eliminar esta cuenta pendiente?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Eliminar', style: 'destructive', onPress: () => {
+        deletePendingBill(id).then(setPendingBills).catch(() => Alert.alert('Error', 'No se pudo eliminar.'));
+      } },
+    ]);
+  };
+
   const reset = () => {
     setStep(0);
+    setActivePendingId(null);
     setImageUri(null);
     setItems([]);
     setPeople([]);
@@ -709,13 +790,138 @@ ${people
   if (isHome) {
     return (
       <View style={styles.homeScreen}>
+        <Modal
+          visible={pendingSheetVisible && pendingBills.length > 0}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setPendingSheetVisible(false)}
+        >
+          <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,13,35,0.40)' }}>
+            <Pressable
+              accessibilityLabel="Cerrar panel"
+              onPress={() => setPendingSheetVisible(false)}
+              style={{ flex: 1 }}
+            />
+            <View style={{
+              backgroundColor: '#FFFFFF', borderTopLeftRadius: 24,
+              borderTopRightRadius: 24, padding: 24, paddingBottom: 36, gap: 16,
+            }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={{ fontSize: 21, fontWeight: '800', color: '#191B48' }}>
+                  {pendingSheetMode === 'confirm' ? '¿Comenzar nueva cuenta?' : pendingSheetMode === 'new' ? 'Tienes una cuenta pendiente' : 'Cuenta pendiente'}
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Cerrar"
+                  onPress={() => setPendingSheetVisible(false)}
+                  style={{ padding: 8 }}
+                >
+                  <Text style={{ fontSize: 22, color: '#191B48' }}>×</Text>
+                </Pressable>
+              </View>
+              {pendingSheetMode === 'confirm' && (
+                <Text style={{ color: '#79778D', lineHeight: 22 }}>
+                  Se eliminará la división guardada. Esta acción no se puede deshacer.
+                </Text>
+              )}
+              {pendingBills.length > 0 && pendingSheetMode !== 'confirm' && (
+                <>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <Image
+                      source={require('./assets/cuanto-pago-logo.png')}
+                      style={{ width: 38, height: 38 }}
+                      resizeMode="contain"
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: '#191B48', fontWeight: '600' }}>
+                        {new Date(pendingBills[0].savedAt).toLocaleString('es-CL')}
+                      </Text>
+                      <Text style={{ color: '#79778D', marginTop: 3 }}>
+                        {pendingBills[0].items.length} productos · {pendingBills[0].people.length} personas
+                      </Text>
+                    </View>
+                  </View>
+                  <PrimaryButton
+                    label="Continuar división"
+                    onPress={() => {
+                      setPendingSheetVisible(false);
+                      resumeBill(pendingBills[0]);
+                    }}
+                  />
+                  {pendingSheetMode === 'new' && (
+                    <GhostButton
+                      label="Comenzar nueva cuenta"
+                      onPress={() => setPendingSheetMode('confirm')}
+                    />
+                  )}
+                  {pendingSheetMode === 'new' && (
+                    <GhostButton label="Cancelar" onPress={() => setPendingSheetVisible(false)} />
+                  )}
+                  {pendingSheetMode === 'view' && <GhostButton
+                    label="Eliminar pendiente"
+                    onPress={() => Alert.alert(
+                      'Eliminar cuenta pendiente',
+                      '¿Quieres eliminar esta cuenta guardada?',
+                      [
+                        { text: 'Cancelar', style: 'cancel' },
+                        { text: 'Eliminar', style: 'destructive', onPress: async () => {
+                          await removePending(pendingBills[0].id);
+                          setPendingSheetVisible(false);
+                        } },
+                      ],
+                    )}
+                  />}
+                </>
+              )}
+              {pendingSheetMode === 'confirm' && (
+                <>
+                  <PrimaryButton
+                    label="Sí, comenzar nueva cuenta"
+                    onPress={async () => {
+                      try {
+                        for (const bill of pendingBills) await deletePendingBill(bill.id);
+                        setPendingBills([]);
+                        setPendingSheetVisible(false);
+                        reset();
+                        setIsHome(false);
+                      } catch {
+                        Alert.alert('Error', 'No se pudo eliminar la cuenta pendiente.');
+                      }
+                    }}
+                  />
+                  <GhostButton label="Volver" onPress={() => setPendingSheetMode('new')} />
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
         <ScrollView
           contentContainerStyle={styles.homeContainer}
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.homeHeader}>
             <View style={styles.homeBrandWrap}>
-              <Image source={require('./assets/cuanto-pago-logo.png')} style={styles.homeLogoImage} />
+              {/* pending-logo-sheet-v12: logo original sin sustituciones */}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={pendingBills.length ? 'Ver cuenta pendiente' : 'Logo de Cuánto Pago'}
+                disabled={pendingBills.length === 0}
+                onPress={() => { setPendingSheetMode('view'); setPendingSheetVisible(true); }}
+                style={{ position: 'relative' }}
+              >
+                <Image source={require('./assets/cuanto-pago-logo.png')} style={styles.homeLogoImage} />
+                {pendingBills.length > 0 && (
+                  <View style={{
+                    position: 'absolute', top: -6, right: -6,
+                    minWidth: 19, height: 19, paddingHorizontal: 4,
+                    borderRadius: 10, backgroundColor: '#6941E8',
+                    alignItems: 'center', justifyContent: 'center',
+                    borderWidth: 2, borderColor: '#FFFFFF',
+                  }}>
+                    <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: '700' }}>1</Text>
+                  </View>
+                )}
+              </Pressable>
               <Text style={styles.homeBrand}>Cuánto Pago</Text>
             </View>
             <View style={styles.homeProfileButton}>
@@ -723,6 +929,20 @@ ${people
             </View>
           </View>
 
+          {saveFeedback === 'success' && (
+            <View
+              accessibilityRole="alert"
+              style={{
+                marginTop: 8, borderRadius: 12, paddingVertical: 10,
+                paddingHorizontal: 14, backgroundColor: '#F3F0FF',
+                borderWidth: 1, borderColor: '#E3DAFF',
+              }}
+            >
+              <Text style={{ color: '#4C2BA7', fontSize: 13, fontWeight: '600', textAlign: 'center' }}>
+                ✓ Cuenta guardada para continuar después
+              </Text>
+            </View>
+          )}
           <View style={styles.homeHero}>
             <Text style={styles.homeHeroTitle}>La forma más fácil</Text>
             <Text style={styles.homeHeroAccent}>de dividir cuentas</Text>
@@ -749,7 +969,12 @@ ${people
               pressed && styles.homePressed,
             ]}
             onPress={() => {
-              setStep(0);
+              if (pendingBills.length > 0) {
+                setPendingSheetMode('new');
+                setPendingSheetVisible(true);
+                return;
+              }
+              reset();
               setIsHome(false);
             }}
           >
@@ -870,6 +1095,12 @@ ${people
                 icon="📷"
                 onPress={() => pickImage(true)}
               />
+              {imageUri && (
+              <GhostButton 
+                    label={rotating ? 'Girando…' : 'Girar foto 90°'} 
+                    onPress={rotateReceipt} 
+                    disabled={rotating || loading} 
+              />)}
               <SecondaryButton
                 label="Elegir de galería"
                 icon="🖼️"
@@ -1115,6 +1346,12 @@ ${people
         {step === 3 && (
           <Card>
             <Text style={styles.cardTitle}>Asigna los productos</Text>
+            <SecondaryButton label="Continuar después" icon="💾" onPress={continueLater} />
+            {saveFeedback === 'error' && (
+              <Text accessibilityRole="alert" style={{ color: '#A23B52', fontSize: 13, textAlign: 'center' }}>
+                No se pudo guardar. Inténtalo nuevamente.
+              </Text>
+            )}
             <Text style={styles.muted}>
               Toca una o varias personas para indicar quién consumió cada
               producto. Puedes seleccionar varias personas si compartieron un plato.
